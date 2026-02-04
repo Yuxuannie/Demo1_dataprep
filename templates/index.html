@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo 1: Data Preparation Agent</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>🤖 Data Preparation Agent</h1>
+            <p class="subtitle">Intelligent Training Set Selection via Uncertainty-Based Sampling</p>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <!-- Step 1: Upload -->
+            <section id="upload-section" class="card">
+                <h2>Step 1: Upload Data</h2>
+                <div class="upload-area" id="upload-area">
+                    <input type="file" id="file-input" accept=".csv" hidden>
+                    <label for="file-input" class="upload-label">
+                        <div class="upload-icon">📁</div>
+                        <div>Click to upload CSV or drag and drop</div>
+                        <div class="upload-hint">MLQC timing data (unlabeled)</div>
+                    </label>
+                </div>
+                
+                <div id="file-preview" class="file-preview hidden">
+                    <h3>File Preview</h3>
+                    <div id="preview-info"></div>
+                    <div class="button-group">
+                        <label for="target-ratio">Selection Ratio:</label>
+                        <input type="number" id="target-ratio" value="5" min="1" max="20" step="1">
+                        <span>%</span>
+                        <button id="run-agent-btn" class="btn-primary">Run Agent</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 2: Agent Reasoning -->
+            <section id="reasoning-section" class="card hidden">
+                <h2>Step 2: Agent Reasoning Process</h2>
+                
+                <div class="reasoning-stages">
+                    <!-- Stage 1: Observe -->
+                    <div class="stage">
+                        <div class="stage-header" onclick="toggleStage('observe')">
+                            <span class="stage-icon">📊</span>
+                            <span class="stage-title">Stage 1: OBSERVE</span>
+                            <span class="stage-status" id="observe-status">⏳</span>
+                        </div>
+                        <div class="stage-content" id="observe-content">
+                            <pre id="observe-text"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Stage 2: Think -->
+                    <div class="stage">
+                        <div class="stage-header" onclick="toggleStage('think')">
+                            <span class="stage-icon">🧠</span>
+                            <span class="stage-title">Stage 2: THINK</span>
+                            <span class="stage-status" id="think-status">⏳</span>
+                        </div>
+                        <div class="stage-content" id="think-content">
+                            <pre id="think-text"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Stage 3: Decide -->
+                    <div class="stage">
+                        <div class="stage-header" onclick="toggleStage('decide')">
+                            <span class="stage-icon">⚖️</span>
+                            <span class="stage-title">Stage 3: DECIDE</span>
+                            <span class="stage-status" id="decide-status">⏳</span>
+                        </div>
+                        <div class="stage-content" id="decide-content">
+                            <pre id="decide-text"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Stage 4: Act -->
+                    <div class="stage">
+                        <div class="stage-header" onclick="toggleStage('act')">
+                            <span class="stage-icon">⚙️</span>
+                            <span class="stage-title">Stage 4: ACT</span>
+                            <span class="stage-status" id="act-status">⏳</span>
+                        </div>
+                        <div class="stage-content" id="act-content">
+                            <pre id="act-text"></pre>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 3: Results & Visualizations -->
+            <section id="results-section" class="card hidden">
+                <h2>Step 3: Results & Visualizations</h2>
+                
+                <div class="results-summary">
+                    <div class="metric-card">
+                        <div class="metric-value" id="total-samples">-</div>
+                        <div class="metric-label">Total Samples</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="selected-samples">-</div>
+                        <div class="metric-label">Selected</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="selection-ratio">-</div>
+                        <div class="metric-label">Ratio</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="n-clusters">-</div>
+                        <div class="metric-label">Clusters</div>
+                    </div>
+                </div>
+
+                <div class="visualizations">
+                    <div class="viz-container">
+                        <h3>PCA Space: All vs Selected Samples</h3>
+                        <div id="pca-plot"></div>
+                    </div>
+
+                    <div class="viz-container">
+                        <h3>Cluster Distribution</h3>
+                        <div id="cluster-dist-plot"></div>
+                    </div>
+
+                    <div class="viz-container">
+                        <h3>Distance from Centroid (Uncertainty)</h3>
+                        <div id="distance-hist-plot"></div>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button id="download-btn" class="btn-primary">📥 Download Selected Samples</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer>
+            <p>Demo 1: Training Data Preparation Agent | TSMC 2025</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
