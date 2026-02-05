@@ -101,7 +101,7 @@ TIMING_DECIDE_PROMPT = """Make your technical decisions based on clustering anal
 PCA RESULTS:
 - Dimensionality reduction: {original_features} → {pca_components} components
 - Variance preserved: {variance_explained:.1f}%
-- Assessment: {'Excellent' if variance_explained > 0.9 else 'Good' if variance_explained > 0.85 else 'Acceptable'} compression for timing features
+- Assessment: {assessment} compression for timing features
 
 CLUSTERING ALGORITHM COMPARISON:
 {clustering_metrics}

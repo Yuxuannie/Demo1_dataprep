@@ -87,7 +87,7 @@ def main():
     # Initialize timing-aware agent
     print("Initializing timing-aware agent...")
     try:
-        agent = TimingDataSelectionAgent(llm=llm, verbose=False)
+        agent = TimingDataSelectionAgent(llm=llm, verbose=True)
         print("Success: Timing-aware agent initialized\n")
     except Exception as e:
         print(f"Error initializing timing agent: {e}")

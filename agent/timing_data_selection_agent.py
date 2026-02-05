@@ -346,10 +346,20 @@ Return ONLY the JSON object, nothing else.""")
             metrics.append(metric_str)
             print(f"  {metric_str}")
 
+        # Calculate assessment based on variance explained
+        variance_pct = cumsum[n_components-1]
+        if variance_pct > 0.9:
+            assessment = 'Excellent'
+        elif variance_pct > 0.85:
+            assessment = 'Good'
+        else:
+            assessment = 'Acceptable'
+
         decide_prompt = TIMING_DECIDE_PROMPT.format(
             original_features=len(self.current_features[0]),
             pca_components=n_components,
-            variance_explained=cumsum[n_components-1]*100,
+            variance_explained=variance_pct*100,
+            assessment=assessment,
             clustering_metrics='\n'.join(metrics)
         )
 
