@@ -1,38 +1,43 @@
 """
-Enhanced LangChain-based Data Selection Agent with Timing Domain Expertise
-Demonstrates senior timing engineer level reasoning and active learning principles
+Timing-Aware Data Selection Agent
+Senior timing engineer expertise for Monte Carlo sample selection
 """
 
 from typing import Dict, List, Any, Optional
 import json
 import re
-from enhanced_prompts import (
-    ENHANCED_SYSTEM_PROMPT,
-    ENHANCED_OBSERVE_PROMPT,
-    ENHANCED_THINK_PROMPT,
-    ENHANCED_DECIDE_PROMPT,
-    ENHANCED_ACT_PROMPT,
-    LLM_PARAMETERS
+from timing_prompts import (
+    TIMING_SYSTEM_PROMPT,
+    TIMING_OBSERVE_PROMPT,
+    TIMING_THINK_PROMPT,
+    TIMING_DECIDE_PROMPT,
+    TIMING_ACT_PROMPT
 )
 
 
-class EnhancedDataSelectionAgent:
+class TimingDataSelectionAgent:
     """
-    Enhanced LangChain-based agent with timing domain expertise.
+    Timing-aware agent for intelligent Monte Carlo sample selection.
 
-    Key improvements:
-    - Senior timing engineer system prompt with domain knowledge
-    - Stage-specific prompts with active learning principles
-    - Structured reasoning with business context
-    - Specific number citations and technical depth
+    Features:
+    - Senior timing engineer domain expertise
+    - Active learning principles (uncertainty sampling)
+    - Process variation awareness
+    - Business impact focus (cost reduction)
+
+    Workflow:
+    1. OBSERVE: Analyze timing characteristics with domain knowledge
+    2. THINK: Strategic reasoning about selection approach
+    3. DECIDE: Algorithm selection with timing-specific criteria
+    4. ACT: Uncertainty-based sampling for critical corners
     """
 
     def __init__(self, llm, verbose: bool = True):
         """
-        Initialize the enhanced agent.
+        Initialize the timing-aware agent.
 
         Args:
-            llm: LangChain LLM instance (e.g., Ollama)
+            llm: LangChain LLM instance
             verbose: Whether to print reasoning steps
         """
         self.llm = llm
@@ -44,8 +49,8 @@ class EnhancedDataSelectionAgent:
         self.reasoning_log = []
         self._imports_loaded = False
 
-        # Enhanced system prompt with timing domain expertise
-        self.system_prompt = ENHANCED_SYSTEM_PROMPT
+        # Timing domain system prompt
+        self.system_prompt = TIMING_SYSTEM_PROMPT
 
     def _load_imports(self):
         """Load heavy imports only when needed."""
@@ -83,7 +88,7 @@ class EnhancedDataSelectionAgent:
         })
 
     def log_reasoning(self, stage: str, content: str):
-        """Log agent reasoning with enhanced format."""
+        """Log agent reasoning."""
         self._load_imports()
         self.reasoning_log.append({
             'stage': stage,
@@ -92,12 +97,12 @@ class EnhancedDataSelectionAgent:
         })
         if self.verbose:
             print(f"\n{'='*80}")
-            print(f"{stage} (Enhanced Timing Agent)")
+            print(f"{stage}")
             print(f"{'='*80}")
             print(content)
 
     def parse_user_query(self, query: str) -> Dict[str, Any]:
-        """Parse natural language query with enhanced understanding."""
+        """Parse natural language query with timing domain understanding."""
         self._load_imports()
         parsing_prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=self.system_prompt),
@@ -105,7 +110,7 @@ class EnhancedDataSelectionAgent:
 
 Query: "{query}"
 
-Extract and return ONLY valid JSON (no markdown, no extra text) with these fields:
+Extract and return ONLY valid JSON (no special symbols) with these fields:
 - selection_percentage: float between 1 and 100 (e.g., 8.0)
 - selection_criteria: string ("uncertainty", "diversity", "random")
 - clustering_preference: string or null ("gmm", "kmeans", or null for auto)
@@ -135,9 +140,9 @@ Return ONLY the JSON object, nothing else.""")
                     params = json.loads(json_match.group())
                 except json.JSONDecodeError:
                     params = {
-                        'selection_percentage': 8.0,  # Typical for timing
+                        'selection_percentage': 8.0,
                         'selection_criteria': 'uncertainty',
-                        'clustering_preference': 'gmm',  # Better for timing overlap
+                        'clustering_preference': 'gmm',
                         'additional_requirements': 'timing_signoff_focused'
                     }
             else:
@@ -148,20 +153,19 @@ Return ONLY the JSON object, nothing else.""")
                     'additional_requirements': 'timing_signoff_focused'
                 }
 
-        self.add_message('assistant', f"Timing engineer analysis: {params.get('selection_percentage')}% uncertainty-based sampling for Monte Carlo cost reduction")
+        self.add_message('assistant', f"Timing analysis requirements: {params.get('selection_percentage')}% uncertainty-based sampling")
         return params
 
     def observe(self, csv_path: str) -> Dict[str, Any]:
-        """Enhanced OBSERVE stage with timing domain analysis."""
+        """OBSERVE stage with timing domain analysis."""
         self._load_imports()
-        print("\nENHANCED STAGE 1: OBSERVE (Timing Domain Analysis)")
+        print("\nSTAGE 1: OBSERVE (Timing Domain Analysis)")
         print("-" * 80)
 
-        # Load and analyze timing data
         self.current_data = pd.read_csv(csv_path)
         print(f"Analyzing {len(self.current_data)} timing arc samples...")
 
-        # Enhanced feature selection for timing
+        # Timing-focused feature selection
         timing_features = [
             'nominal_delay', 'lib_sigma_delay_late',
             'nominal_tran', 'lib_sigma_tran_late',
@@ -182,17 +186,15 @@ Return ONLY the JSON object, nothing else.""")
         self.current_features = self.current_data[feature_cols].values
         print(f"Selected {len(feature_cols)} timing-critical features")
 
-        # Enhanced analysis with timing focus
         observation = {
             'total_samples': len(self.current_data),
             'n_features': len(feature_cols),
             'feature_names': feature_cols,
             'timing_statistics': {},
-            'cell_types': {},
-            'process_variation_analysis': {}
+            'cell_types': {}
         }
 
-        # Timing-specific statistics
+        # Timing-specific analysis
         for col in feature_cols:
             if col in self.current_data.columns:
                 observation['timing_statistics'][col] = {
@@ -203,16 +205,9 @@ Return ONLY the JSON object, nothing else.""")
                     'cv': float(self.current_data[col].std() / self.current_data[col].mean()) if self.current_data[col].mean() != 0 else 0
                 }
 
-        # Process variation analysis (key for timing)
+        # Process variation analysis
         corr_matrix = self.current_data[feature_cols].corr()
         timing_correlations = []
-
-        # Focus on timing-critical correlations
-        critical_pairs = [
-            ('nominal_delay', 'lib_sigma_delay_late'),
-            ('nominal_tran', 'lib_sigma_tran_late'),
-            ('sigma_by_nominal', 'stdev_by_late_sigma')
-        ]
 
         for i, col1 in enumerate(feature_cols):
             for j, col2 in enumerate(feature_cols[i+1:], i+1):
@@ -221,13 +216,12 @@ Return ONLY the JSON object, nothing else.""")
                     timing_correlations.append({
                         'feature1': col1,
                         'feature2': col2,
-                        'correlation': float(corr_val),
-                        'timing_significance': 'HIGH' if (col1, col2) in critical_pairs or (col2, col1) in critical_pairs else 'MEDIUM'
+                        'correlation': float(corr_val)
                     })
 
         observation['high_correlations'] = timing_correlations
 
-        # Cell type analysis for timing diversity
+        # Cell type analysis
         try:
             if 'arc_pt' in self.current_data.columns:
                 cell_types = self.current_data['arc_pt'].str.extract(r'^([A-Z0-9]+)')[0]
@@ -237,8 +231,8 @@ Return ONLY the JSON object, nothing else.""")
         except:
             observation['cell_types'] = {'unknown': len(self.current_data)}
 
-        # Generate enhanced observation with timing expertise
-        observe_prompt = ENHANCED_OBSERVE_PROMPT.format(
+        # Generate timing domain observation
+        observe_prompt = TIMING_OBSERVE_PROMPT.format(
             total_samples=observation['total_samples'],
             n_features=observation['n_features'],
             n_cell_types=len(observation['cell_types']),
@@ -264,15 +258,14 @@ Return ONLY the JSON object, nothing else.""")
         return observation
 
     def think(self, observation: Dict[str, Any], target_percentage: float) -> Dict[str, Any]:
-        """Enhanced THINK stage with timing strategy reasoning."""
+        """THINK stage with timing strategy reasoning."""
         self._load_imports()
-        print("\nENHANCED STAGE 2: THINK (Strategic Timing Analysis)")
+        print("\nSTAGE 2: THINK (Strategic Timing Analysis)")
         print("-" * 80)
 
         target_count = int(observation['total_samples'] * target_percentage / 100)
 
-        # Enhanced thinking prompt with timing domain questions
-        think_prompt = ENHANCED_THINK_PROMPT.format(
+        think_prompt = TIMING_THINK_PROMPT.format(
             total_samples=observation['total_samples'],
             target_percentage=target_percentage,
             target_count=target_count,
@@ -297,29 +290,26 @@ Return ONLY the JSON object, nothing else.""")
         self.add_message('assistant', thinking_text)
         self.log_reasoning('THINK', thinking_text)
 
-        # Enhanced strategy with timing-specific parameters
         strategy = {
             'target_percentage': target_percentage,
             'target_count': target_count,
             'use_pca': True,
-            'variance_threshold': 0.92,  # Higher for timing precision
-            'n_clusters_range': [8, 10, 12],  # More clusters for timing diversity
-            'selection_method': 'uncertainty_based',  # Active learning for timing
-            'timing_focus': True,
-            'pca_info': None,
-            'clustering_info': None
+            'variance_threshold': 0.92,
+            'n_clusters_range': [8, 10, 12],
+            'selection_method': 'uncertainty_based',
+            'timing_focus': True
         }
 
         return strategy
 
     def decide(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced DECIDE stage with timing algorithm selection."""
+        """DECIDE stage with timing algorithm selection."""
         self._load_imports()
-        print("\nENHANCED STAGE 3: DECIDE (Timing Algorithm Optimization)")
+        print("\nSTAGE 3: DECIDE (Timing Algorithm Selection)")
         print("-" * 80)
 
-        # Enhanced PCA with timing focus
-        print("Applying PCA for timing feature compression...")
+        # PCA for timing feature compression
+        print("Applying PCA for timing feature optimization...")
         features_scaled = self.scaler.fit_transform(self.current_features)
         pca = PCA()
         pca.fit(features_scaled)
@@ -330,46 +320,36 @@ Return ONLY the JSON object, nothing else.""")
         pca_final = PCA(n_components=n_components)
         features_pca = pca_final.fit_transform(features_scaled)
 
-        print(f"PCA: {len(pca.explained_variance_ratio_)} → {n_components} components")
-        print(f"Variance preserved: {cumsum[n_components-1]*100:.1f}% (timing-optimized)")
+        print(f"PCA: {len(pca.explained_variance_ratio_)} -> {n_components} components")
+        print(f"Variance preserved: {cumsum[n_components-1]*100:.1f}%")
 
-        strategy['pca_info'] = {
-            'n_components': n_components,
-            'variance_explained': float(cumsum[n_components-1]),
-            'original_features': len(self.current_features[0])
-        }
-
-        # Enhanced clustering comparison
-        print("\nTiming-aware clustering algorithm comparison...")
+        # Timing-aware clustering comparison
+        print("\nTesting clustering algorithms for timing data...")
         results = {}
         metrics = []
 
         for k in strategy['n_clusters_range']:
-            # K-means
             kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
             kmeans_labels = kmeans.fit_predict(features_pca)
             kmeans_inertia = kmeans.inertia_
 
-            # GMM (preferred for timing overlap)
             gmm = GaussianMixture(n_components=k, random_state=42)
             gmm_labels = gmm.fit_predict(features_pca)
             gmm_bic = gmm.bic(features_pca)
-            gmm_aic = gmm.aic(features_pca)
 
             results[k] = {
                 'kmeans': {'inertia': kmeans_inertia, 'labels': kmeans_labels},
-                'gmm': {'bic': gmm_bic, 'aic': gmm_aic, 'labels': gmm_labels}
+                'gmm': {'bic': gmm_bic, 'labels': gmm_labels}
             }
 
-            metric_str = f"k={k}: K-means inertia={kmeans_inertia:.0f}, GMM BIC={gmm_bic:.0f}, AIC={gmm_aic:.0f}"
+            metric_str = f"k={k}: K-means inertia={kmeans_inertia:.0f}, GMM BIC={gmm_bic:.0f}"
             metrics.append(metric_str)
             print(f"  {metric_str}")
 
-        # Enhanced decision prompt with timing metrics
-        decide_prompt = ENHANCED_DECIDE_PROMPT.format(
-            original_features=strategy['pca_info']['original_features'],
+        decide_prompt = TIMING_DECIDE_PROMPT.format(
+            original_features=len(self.current_features[0]),
             pca_components=n_components,
-            variance_explained=strategy['pca_info']['variance_explained'],
+            variance_explained=cumsum[n_components-1]*100,
             clustering_metrics='\n'.join(metrics)
         )
 
@@ -386,15 +366,13 @@ Return ONLY the JSON object, nothing else.""")
         else:
             decision_text = str(decision_reasoning)
 
-        # Enhanced parameter extraction with timing preference
         best_k = self._extract_cluster_count(decision_text)
-        # Prefer GMM for timing data overlaps
         best_algo = 'gmm' if 'gmm' in decision_text.lower() or 'gaussian' in decision_text.lower() else 'kmeans'
 
         self.add_message('assistant', decision_text)
         self.log_reasoning('DECIDE', decision_text)
 
-        # Fit final model with timing optimization
+        # Fit final model
         if best_algo == 'gmm':
             final_model = GaussianMixture(n_components=best_k, random_state=42)
             final_labels = final_model.fit_predict(features_pca)
@@ -404,29 +382,8 @@ Return ONLY the JSON object, nothing else.""")
             final_labels = final_model.fit_predict(features_pca)
             centroids = final_model.cluster_centers_
 
-        # Calculate distances for uncertainty sampling
         distances = cdist(features_pca, centroids, metric='euclidean')
         min_distances = np.min(distances, axis=1)
-
-        # Enhanced cluster analysis
-        cluster_info = []
-        for i in range(best_k):
-            mask = final_labels == i
-            cluster_size = np.sum(mask)
-            avg_distance = np.mean(min_distances[mask]) if np.any(mask) else 0
-            cluster_info.append({
-                'id': i,
-                'size': int(cluster_size),
-                'percentage': float(cluster_size / len(self.current_data) * 100),
-                'avg_uncertainty': float(avg_distance)
-            })
-
-        strategy['clustering_info'] = {
-            'algorithm': best_algo,
-            'n_clusters': best_k,
-            'clusters': cluster_info,
-            'timing_optimized': True
-        }
 
         decision = {
             'pca': {
@@ -442,16 +399,15 @@ Return ONLY the JSON object, nothing else.""")
                 'centroids': centroids,
                 'distances': min_distances
             },
-            'features_pca': features_pca,
-            'cluster_info': cluster_info
+            'features_pca': features_pca
         }
 
         return decision
 
     def act(self, decision: Dict[str, Any], strategy: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced ACT stage with timing-focused uncertainty sampling."""
+        """ACT stage with timing-optimized uncertainty sampling."""
         self._load_imports()
-        print("\nENHANCED STAGE 4: ACT (Timing-Optimized Sample Selection)")
+        print("\nSTAGE 4: ACT (Timing-Optimized Sample Selection)")
         print("-" * 80)
 
         target_count = strategy['target_count']
@@ -459,7 +415,6 @@ Return ONLY the JSON object, nothing else.""")
         distances = decision['clustering']['distances']
         n_clusters = decision['clustering']['n_clusters']
 
-        # Enhanced uncertainty-based sampling for timing
         cluster_sizes = [np.sum(labels == i) for i in range(n_clusters)]
         base_per_cluster = [int(size * strategy['target_percentage'] / 100) for size in cluster_sizes]
 
@@ -468,7 +423,6 @@ Return ONLY the JSON object, nothing else.""")
         for i in range(n_clusters):
             mask = labels == i
             if np.any(mask):
-                # Weight by 90th percentile distance for timing edge cases
                 uncertainty = np.percentile(distances[mask], 90)
             else:
                 uncertainty = 0
@@ -477,12 +431,11 @@ Return ONLY the JSON object, nothing else.""")
         max_uncertainty = max(cluster_uncertainties) if cluster_uncertainties else 1
         uncertainty_weights = [u / max_uncertainty for u in cluster_uncertainties]
 
-        # Enhanced allocation with timing focus
+        # Enhanced allocation for timing corners
         adjusted_per_cluster = []
         for i in range(n_clusters):
             base = base_per_cluster[i]
-            # Higher boost for high-uncertainty timing clusters
-            boost = int(base * uncertainty_weights[i] * 0.3)  # Increased from 0.2
+            boost = int(base * uncertainty_weights[i] * 0.3)
             adjusted_per_cluster.append(base + boost)
 
         total_adjusted = sum(adjusted_per_cluster)
@@ -490,11 +443,10 @@ Return ONLY the JSON object, nothing else.""")
 
         diff = target_count - sum(final_per_cluster)
         if diff > 0:
-            # Add to highest uncertainty cluster
             highest_uncertainty_cluster = np.argmax(uncertainty_weights)
             final_per_cluster[highest_uncertainty_cluster] += diff
 
-        # Enhanced uncertainty-based selection
+        # Uncertainty-based selection (samples far from centroids)
         selected_indices = []
         selection_details = []
 
@@ -505,25 +457,20 @@ Return ONLY the JSON object, nothing else.""")
 
             n_select = final_per_cluster[i]
 
-            # Select samples with HIGHEST distances (max uncertainty)
             sorted_idx = np.argsort(cluster_distances)[::-1]
             selected = cluster_indices[sorted_idx[:n_select]]
             selected_indices.extend(selected.tolist())
 
-            avg_uncertainty = np.mean(cluster_distances[sorted_idx[:n_select]]) if n_select > 0 else 0
             selection_details.append(
-                f"Cluster {i}: {n_select}/{cluster_sizes[i]} samples ({n_select/cluster_sizes[i]*100:.1f}%), avg_uncertainty={avg_uncertainty:.3f}"
+                f"Cluster {i}: {n_select}/{cluster_sizes[i]} samples ({n_select/cluster_sizes[i]*100:.1f}%)"
             )
             print(f"  {selection_details[-1]}")
 
-        # Create enhanced result dataset
         selected_df = self.current_data.iloc[selected_indices].copy()
         selected_df['cluster_id'] = labels[selected_indices]
         selected_df['uncertainty_score'] = distances[selected_indices]
-        selected_df['timing_criticality'] = 'HIGH'  # All uncertainty-selected samples are critical
 
-        # Enhanced action explanation
-        act_prompt = ENHANCED_ACT_PROMPT.format(
+        act_prompt = TIMING_ACT_PROMPT.format(
             total_samples=len(self.current_data),
             target_percentage=strategy['target_percentage'],
             target_count=target_count,
@@ -555,17 +502,16 @@ Return ONLY the JSON object, nothing else.""")
             'cluster_distribution': final_per_cluster,
             'uncertainty_weights': uncertainty_weights,
             'selection_details': selection_details,
-            'timing_optimized': True,
-            'expected_cost_reduction': '50% (10% → 5% Monte Carlo coverage)'
+            'expected_cost_reduction': '50% (10% to 5% Monte Carlo coverage)'
         }
 
         return result
 
     def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
-        """Enhanced main workflow with timing domain expertise."""
+        """Main workflow with timing domain expertise."""
         self._load_imports()
         print("\n" + "=" * 80)
-        print("ENHANCED DATA SELECTION AGENT - Senior Timing Engineer AI")
+        print("TIMING-AWARE DATA SELECTION AGENT")
         print("=" * 80)
 
         self.add_message('user', user_query)
@@ -573,7 +519,6 @@ Return ONLY the JSON object, nothing else.""")
         print("\nParsing timing engineer requirements...")
         params = self.parse_user_query(user_query)
 
-        # Enhanced workflow with timing focus
         observation = self.observe(csv_path)
         strategy = self.think(observation, params['selection_percentage'])
         decision = self.decide(strategy)
@@ -582,9 +527,9 @@ Return ONLY the JSON object, nothing else.""")
         print("\n" + "=" * 80)
         print("TIMING-OPTIMIZED SELECTION COMPLETE")
         print("=" * 80)
-        print(f"Intelligent sample selection: {result['n_selected']}/{len(self.current_data)} ({result['n_selected']/len(self.current_data)*100:.1f}%)")
-        print(f"Expected Monte Carlo cost reduction: {result['expected_cost_reduction']}")
-        print(f"Active learning principle: Uncertainty-based sampling for timing robustness")
+        print(f"Selected {result['n_selected']}/{len(self.current_data)} samples ({result['n_selected']/len(self.current_data)*100:.1f}%)")
+        print(f"Expected cost reduction: {result['expected_cost_reduction']}")
+        print(f"Active learning: Uncertainty-based sampling for timing robustness")
 
         return {
             'observation': observation,
@@ -593,14 +538,12 @@ Return ONLY the JSON object, nothing else.""")
             'result': result,
             'reasoning_log': self.reasoning_log,
             'conversation_history': self.conversation_history,
-            'parsed_params': params,
-            'enhancement_level': 'SENIOR_TIMING_ENGINEER'
+            'parsed_params': params
         }
 
     def _extract_cluster_count(self, text: str) -> int:
-        """Enhanced cluster count extraction with timing preferences."""
+        """Extract cluster count from LLM response."""
         try:
-            # Look for explicit numbers first
             matches = re.findall(r'(\d+)\s*cluster', text, re.IGNORECASE)
             if matches:
                 return int(matches[0])
@@ -609,28 +552,14 @@ Return ONLY the JSON object, nothing else.""")
             if matches:
                 return int(matches[0])
 
-            # Look for "optimal" or "best" with numbers
             matches = re.findall(r'(?:optimal|best|choose).*?(\d+)', text, re.IGNORECASE)
             if matches:
                 return int(matches[0])
         except:
             pass
 
-        return 10  # Default for timing data (higher than original 8)
+        return 10
 
-    def get_enhanced_summary(self) -> Dict[str, Any]:
-        """Get enhanced summary with timing metrics."""
-        return {
-            'total_reasoning_stages': len(self.reasoning_log),
-            'timing_expertise_level': 'SENIOR_ENGINEER',
-            'active_learning_applied': True,
-            'domain_knowledge_integrated': True,
-            'business_impact_considered': True,
-            'enhancement_features': [
-                'Timing domain system prompt',
-                'Process variation analysis',
-                'Uncertainty-based sampling',
-                'Active learning principles',
-                'Business cost justification'
-            ]
-        }
+    def get_conversation_history(self) -> List[Dict[str, Any]]:
+        """Get conversation history."""
+        return self.conversation_history
