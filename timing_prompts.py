@@ -40,28 +40,32 @@ DATASET CONTEXT:
 - Cell types: {n_cell_types} different logic cells
 - High correlations: {n_high_corr} feature pairs with |r| > 0.7
 
-KEY FEATURES TO ANALYZE:
-- nominal_delay, lib_sigma_delay_late: Core delay and variability
-- sigma_by_nominal: Variability ratio (critical for process corners)
-- early_sigma_by_late_sigma: Skewness indicator
-- cross_signal_enc: Signal integrity effects
+CALCULATED STATISTICS FOR THIS DATASET:
+{calculated_stats}
+
+KEY CORRELATIONS FOUND:
+{correlation_details}
+
+SIGMA_BY_NOMINAL ANALYSIS:
+{sigma_analysis}
 
 TIMING DOMAIN ANALYSIS REQUIRED:
+Based on the ACTUAL calculated values above, provide your timing engineer analysis:
 
-1. Process Variation Patterns:
-   - Is delay variability proportional to nominal delay? (Expected: r > 0.8)
-   - What's the sigma_by_nominal range? (Normal: 0.02-0.15, High-var: >0.15)
+1. Process Variation Assessment:
+   - Comment on the actual delay-variability correlation values shown
+   - Interpret the sigma_by_nominal distribution for this specific dataset
 
-2. Timing Corner Distribution:
-   - Are there distinct fast/slow path clusters?
-   - Which cell types contribute most variability?
+2. Timing Corner Characteristics:
+   - Analyze the correlation patterns for timing clustering potential
+   - Assess variability distribution across cell types
 
-3. Dimensionality Assessment:
-   - How many features are redundant due to correlation?
-   - Will PCA preserve timing-critical information?
+3. PCA Readiness:
+   - Evaluate correlation redundancy based on actual values
+   - Predict PCA effectiveness for this specific feature set
 
 PROVIDE YOUR OBSERVATION (3-4 sentences):
-Analyze the data like a senior timing engineer. Cite specific correlation values, identify timing-critical patterns, and assess readiness for uncertainty-based sampling. Explain WHY these patterns matter for timing signoff accuracy.
+Analyze THIS SPECIFIC DATASET using the calculated statistics provided above. Cite the ACTUAL correlation values and ranges. Explain what these specific numbers mean for timing signoff and uncertainty sampling readiness.
 
 Use plain text only, no special symbols."""
 

@@ -110,13 +110,17 @@ class TimingDataSelectionAgent:
 
 Query: "{query}"
 
-Extract and return ONLY valid JSON (no special symbols) with these fields:
-- selection_percentage: float between 1 and 100 (e.g., 8.0)
+CRITICAL: If NO percentage is mentioned in the query, set selection_percentage to null.
+ONLY use a percentage if explicitly stated (e.g., "8%", "select 5%", "10 percent").
+
+Extract and return ONLY valid JSON with these fields:
+- selection_percentage: float if specified, null if not mentioned (e.g., 8.0 or null)
 - selection_criteria: string ("uncertainty", "diversity", "random")
 - clustering_preference: string or null ("gmm", "kmeans", or null for auto)
 - additional_requirements: string or null for any special timing requirements
 
-For timing library characterization, default to uncertainty-based sampling (active learning principle).
+For timing library characterization, always use uncertainty-based sampling (active learning).
+If no percentage specified, the system will determine optimal percentage based on data analysis.
 
 Return ONLY the JSON object, nothing else.""")
         ])
@@ -140,20 +144,21 @@ Return ONLY the JSON object, nothing else.""")
                     params = json.loads(json_match.group())
                 except json.JSONDecodeError:
                     params = {
-                        'selection_percentage': 8.0,
+                        'selection_percentage': None,  # No default - will determine from data
                         'selection_criteria': 'uncertainty',
                         'clustering_preference': 'gmm',
                         'additional_requirements': 'timing_signoff_focused'
                     }
             else:
                 params = {
-                    'selection_percentage': 8.0,
+                    'selection_percentage': None,  # No default - will determine from data
                     'selection_criteria': 'uncertainty',
                     'clustering_preference': 'gmm',
                     'additional_requirements': 'timing_signoff_focused'
                 }
 
-        self.add_message('assistant', f"Timing analysis requirements: {params.get('selection_percentage')}% uncertainty-based sampling")
+        # Store parameters for later processing after data is loaded
+        self.add_message('assistant', f"Parsed query parameters: {params}")
         return params
 
     def observe(self, csv_path: str) -> Dict[str, Any]:
@@ -231,12 +236,34 @@ Return ONLY the JSON object, nothing else.""")
         except:
             observation['cell_types'] = {'unknown': len(self.current_data)}
 
-        # Generate timing domain observation
+        # CRITICAL FIX: Calculate actual statistics for prompt injection
+        calculated_stats = []
+        key_features = ['nominal_delay', 'lib_sigma_delay_late', 'sigma_by_nominal']
+
+        for feature in key_features:
+            if feature in feature_cols:
+                stats = observation['timing_statistics'][feature]
+                calculated_stats.append(f"- {feature}: mean={stats['mean']:.4f}, std={stats['std']:.4f}, range={stats['min']:.4f} to {stats['max']:.4f}")
+
+        correlation_details = []
+        for corr in timing_correlations:
+            correlation_details.append(f"- {corr['feature1']} vs {corr['feature2']}: r={corr['correlation']:.3f}")
+
+        # Sigma_by_nominal specific analysis
+        sigma_analysis = "No sigma_by_nominal data available"
+        if 'sigma_by_nominal' in feature_cols and 'sigma_by_nominal' in observation['timing_statistics']:
+            sigma_stats = observation['timing_statistics']['sigma_by_nominal']
+            sigma_analysis = f"Range: {sigma_stats['min']:.3f} to {sigma_stats['max']:.3f}, Mean: {sigma_stats['mean']:.3f}, Std: {sigma_stats['std']:.3f}"
+
+        # Generate timing domain observation with ACTUAL DATA
         observe_prompt = TIMING_OBSERVE_PROMPT.format(
             total_samples=observation['total_samples'],
             n_features=observation['n_features'],
             n_cell_types=len(observation['cell_types']),
-            n_high_corr=len(timing_correlations)
+            n_high_corr=len(timing_correlations),
+            calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
+            correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
+            sigma_analysis=sigma_analysis
         )
 
         prompt_template = ChatPromptTemplate.from_messages([
@@ -530,6 +557,20 @@ Return ONLY the JSON object, nothing else.""")
         params = self.parse_user_query(user_query)
 
         observation = self.observe(csv_path)
+
+        # Handle null percentage - determine optimal percentage based on actual dataset size
+        if params.get('selection_percentage') is None:
+            data_size = len(self.current_data)
+            if data_size > 50000:
+                optimal_percentage = 3.0  # Large datasets need less percentage
+            elif data_size > 20000:
+                optimal_percentage = 5.0  # Medium datasets
+            else:
+                optimal_percentage = 8.0  # Smaller datasets can afford higher percentage
+
+            params['selection_percentage'] = optimal_percentage
+            print(f"No percentage specified. Data-driven selection: {optimal_percentage}% for {data_size:,} samples")
+
         strategy = self.think(observation, params['selection_percentage'])
         decision = self.decide(strategy)
         result = self.act(decision, strategy)
