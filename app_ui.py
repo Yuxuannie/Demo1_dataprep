@@ -15,7 +15,7 @@ import time
 # Configure Streamlit page
 st.set_page_config(
     page_title="Timing Agent Chat",
-    page_icon="💬",
+    page_icon="[T]",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -93,7 +93,7 @@ def initialize_agent():
 
         # Test Ollama connection
         if not test_ollama_connection():
-            st.error("❌ Cannot connect to Ollama. Please ensure Ollama is running: `ollama serve`")
+            st.error("[ERROR] Cannot connect to Ollama. Please ensure Ollama is running: `ollama serve`")
             return None
 
         # Initialize LLM and agent
@@ -103,7 +103,7 @@ def initialize_agent():
         return agent
 
     except Exception as e:
-        st.error(f"❌ Failed to initialize agent: {e}")
+        st.error(f"[ERROR] Failed to initialize agent: {e}")
         return None
 
 
@@ -116,7 +116,7 @@ def create_download_csv(df, filename="selected_data.csv"):
 
 def display_reasoning_log(reasoning_log):
     """Display reasoning log with proper formatting."""
-    st.markdown("### 🧠 Senior Timing Engineer Reasoning")
+    st.markdown("### Reasoning Senior Timing Engineer Reasoning")
 
     for i, log_entry in enumerate(reasoning_log):
         stage = log_entry['stage']
@@ -133,7 +133,7 @@ def display_reasoning_log(reasoning_log):
 
 def display_visual_dashboard(results, csv_path):
     """Display visual validation dashboard."""
-    st.markdown("### 📊 Visual Validation Dashboard")
+    st.markdown("### Dashboard Visual Validation Dashboard")
 
     try:
         from plot_utils import TimingVisualizationDashboard
@@ -141,10 +141,16 @@ def display_visual_dashboard(results, csv_path):
         # Create dashboard
         dashboard = TimingVisualizationDashboard()
 
-        # Generate plots
-        fig = dashboard.create_validation_dashboard(
-            results=results,
-            csv_path=csv_path
+        # Load CSV data for dashboard
+        df = pd.read_csv(csv_path)
+
+        # Generate plots using correct method name and data structure
+        fig, plot_metadata = dashboard.generate_dashboard_plots(
+            df=df,
+            selected_indices=results.get('result', {}).get('selected_indices', []),
+            clusters=results.get('decision', {}).get('clustering', {}).get('labels', []),
+            centroids=results.get('decision', {}).get('clustering', {}).get('centroids', []),
+            pca_components=results.get('decision', {}).get('pca', {}).get('n_components', 2)
         )
 
         if fig:
@@ -152,16 +158,16 @@ def display_visual_dashboard(results, csv_path):
 
             # Add interpretation
             st.markdown("""
-            **📈 Dashboard Interpretation:**
+            **Analysis Dashboard Interpretation:**
             - **Left**: PCA cluster visualization showing selected boundary samples (red dots)
             - **Center**: Feature correlation heatmap justifying PCA dimensionality reduction
             - **Right**: Distribution overlay proving selected samples cover critical tail regions
             """)
         else:
-            st.warning("⚠️ Could not generate visualization dashboard")
+            st.warning("[WARNING] Could not generate visualization dashboard")
 
     except Exception as e:
-        st.error(f"❌ Visualization error: {e}")
+        st.error(f"[ERROR] Visualization error: {e}")
 
 
 def add_message_to_chat(role, content, message_type="text", metadata=None):
@@ -189,7 +195,7 @@ def display_chat_message(message):
     if role == 'user':
         st.markdown(f"""
         <div class="chat-message user-message">
-        <strong>👤 You:</strong><br>
+        <strong>[USER] You:</strong><br>
         {content}
         </div>
         """, unsafe_allow_html=True)
@@ -197,7 +203,7 @@ def display_chat_message(message):
     elif role == 'agent':
         st.markdown(f"""
         <div class="chat-message agent-message">
-        <strong>🤖 Timing Agent:</strong><br>
+        <strong>[AGENT] Timing Agent:</strong><br>
         {content}
         </div>
         """, unsafe_allow_html=True)
@@ -212,7 +218,7 @@ def display_chat_message(message):
     elif role == 'system':
         st.markdown(f"""
         <div class="chat-message system-message">
-        ℹ️ {content}
+        [INFO] {content}
         </div>
         """, unsafe_allow_html=True)
 
@@ -255,7 +261,7 @@ def display_analysis_results(results):
         """, unsafe_allow_html=True)
 
     # Reasoning log in expandable sections
-    with st.expander("🧠 View Detailed Reasoning"):
+    with st.expander("Reasoning View Detailed Reasoning"):
         for log_entry in results['reasoning_log']:
             stage = log_entry['stage']
             content = log_entry['content']
@@ -274,7 +280,7 @@ def display_analysis_results(results):
         )
 
         st.download_button(
-            label="📥 Download Selected Data",
+            label="Download Download Selected Data",
             data=csv_data,
             file_name=f"timing_selected_{results['result']['n_selected']}_samples.csv",
             mime="text/csv",
@@ -317,21 +323,21 @@ Please specify what you'd like to modify, and I'll rerun the analysis with your 
 
         # Create response message
         response_lines = []
-        response_lines.append(f"✅ **Analysis Complete!**")
+        response_lines.append(f"[OK] **Analysis Complete!**")
         response_lines.append(f"")
         response_lines.append(f"Selected **{results['result']['n_selected']:,}** samples from **{results['observation']['total_samples']:,}** total")
         response_lines.append(f"Selection rate: **{results['parsed_params']['selection_percentage']:.1f}%**")
         response_lines.append(f"Algorithm: **{results['decision']['clustering']['algorithm'].upper()}** with **{results['decision']['clustering']['n_clusters']}** clusters")
         response_lines.append(f"Expected cost reduction: **{results['result']['expected_cost_reduction']}**")
         response_lines.append(f"")
-        response_lines.append(f"💡 You can ask me to modify this analysis or request different parameters!")
+        response_lines.append(f"Tips You can ask me to modify this analysis or request different parameters!")
 
         response = "\n".join(response_lines)
 
         return response, results
 
     except Exception as e:
-        error_response = f"""❌ **Analysis Error:** {str(e)}
+        error_response = f"""[ERROR] **Analysis Error:** {str(e)}
 
 Please check:
 - Your CSV file is properly formatted
@@ -348,7 +354,7 @@ def main():
 
     # Header
     st.markdown("""
-    <div class="main-header">💬 Timing Agent Chat</div>
+    <div class="main-header">Chat Timing Agent Chat</div>
     """, unsafe_allow_html=True)
 
     # Initialize session state
@@ -363,11 +369,11 @@ def main():
 
     # Sidebar - Settings and Configuration
     with st.sidebar:
-        st.markdown("## ⚙️ Setup")
+        st.markdown("## Setup Setup")
 
         # Agent initialization
-        st.markdown("### 🤖 Agent Status")
-        if st.button("🔄 Initialize Agent", type="primary", use_container_width=True):
+        st.markdown("### [AGENT] Agent Status")
+        if st.button("Refresh Initialize Agent", type="primary", use_container_width=True):
             with st.spinner("Initializing timing agent..."):
                 agent = initialize_agent()
                 if agent:
@@ -375,14 +381,14 @@ def main():
                     add_message_to_chat("system", "Timing agent initialized successfully! Upload a CSV file to begin.")
 
         if st.session_state.agent:
-            st.success("✅ Agent Ready")
+            st.success("[OK] Agent Ready")
         else:
-            st.warning("❗ Please initialize agent")
+            st.warning("[!] Please initialize agent")
 
         st.markdown("---")
 
         # File upload
-        st.markdown("### 📁 Data Upload")
+        st.markdown("### Data Data Upload")
         uploaded_file = st.file_uploader(
             "Upload Timing CSV",
             type=['csv'],
@@ -399,7 +405,7 @@ def main():
 
                 # Display file info
                 df = pd.read_csv(csv_path)
-                st.success(f"✅ {len(df):,} rows loaded")
+                st.success(f"[OK] {len(df):,} rows loaded")
 
                 # Add system message if this is a new file
                 if len(st.session_state.chat_history) == 0 or not any(
@@ -412,32 +418,32 @@ def main():
                     )
 
             except Exception as e:
-                st.error(f"❌ Error: {e}")
+                st.error(f"[ERROR] Error: {e}")
 
         st.markdown("---")
 
         # Quick actions
-        st.markdown("### 🚀 Quick Actions")
+        st.markdown("### Actions Quick Actions")
         if st.session_state.agent and st.session_state.csv_path:
 
-            if st.button("📊 Standard 5% Selection", use_container_width=True):
+            if st.button("Dashboard Standard 5% Selection", use_container_width=True):
                 st.session_state.pending_request = "Select 5% of timing data for Monte Carlo characterization"
 
-            if st.button("🎯 Conservative 3% Selection", use_container_width=True):
+            if st.button("Target Conservative 3% Selection", use_container_width=True):
                 st.session_state.pending_request = "Select 3% of timing data with focus on boundary cases"
 
-            if st.button("📈 Comprehensive 8% Analysis", use_container_width=True):
+            if st.button("Analysis Comprehensive 8% Analysis", use_container_width=True):
                 st.session_state.pending_request = "Select 8% of timing data for comprehensive library characterization"
 
         # Clear chat
         st.markdown("---")
-        if st.button("🗑️ Clear Chat", use_container_width=True):
+        if st.button("Clear Clear Chat", use_container_width=True):
             st.session_state.chat_history = []
             st.session_state.current_results = None
             st.rerun()
 
     # Main chat area
-    st.markdown("## 💬 Chat with Timing Agent")
+    st.markdown("## Chat Chat with Timing Agent")
 
     # Chat display container
     chat_container = st.container()
@@ -447,7 +453,7 @@ def main():
         if not st.session_state.chat_history:
             st.markdown("""
             <div class="chat-message system-message">
-            🤖 Welcome! I'm your Senior Timing Engineer AI assistant.
+            [AGENT] Welcome! I'm your Senior Timing Engineer AI assistant.
             <br><br>
             <strong>Get started:</strong>
             <br>1. Initialize the agent in the sidebar
@@ -474,7 +480,7 @@ def main():
         add_message_to_chat("user", user_input)
 
         # Process request
-        with st.spinner("🤖 Analyzing..."):
+        with st.spinner("[AGENT] Analyzing..."):
             response, results = handle_user_request(user_input, st.session_state.agent, st.session_state.csv_path)
 
         # Add agent response
@@ -498,7 +504,7 @@ def main():
         add_message_to_chat("user", user_input)
 
         # Process the request
-        with st.spinner("🤖 Analyzing..."):
+        with st.spinner("[AGENT] Analyzing..."):
             response, results = handle_user_request(user_input, st.session_state.agent, st.session_state.csv_path)
 
         # Add agent response
@@ -523,7 +529,7 @@ def main():
         col1, col2 = st.columns([1, 1])
 
         with col1:
-            if st.button("📊 Show Visual Dashboard", type="secondary", use_container_width=True):
+            if st.button("Dashboard Show Visual Dashboard", type="secondary", use_container_width=True):
                 add_message_to_chat(
                     "agent",
                     "Here's the visual validation dashboard showing cluster analysis and sample distribution:",
@@ -533,7 +539,7 @@ def main():
                 st.rerun()
 
         with col2:
-            if st.button("💡 Suggest Modifications", use_container_width=True):
+            if st.button("Tips Suggest Modifications", use_container_width=True):
                 suggestions = """Here are some modifications you could try:
 
 **Different Percentages:**

@@ -10,25 +10,25 @@ import os
 
 def run_command(cmd, description):
     """Run a command and show results."""
-    print(f"\n🔄 {description}")
+    print(f"\nRefresh {description}")
     print(f"Command: {' '.join(cmd)}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
-            print("✅ Success")
+            print("[OK] Success")
             if result.stdout.strip():
                 print(f"Output: {result.stdout.strip()}")
         else:
-            print("❌ Failed")
+            print("[ERROR] Failed")
             if result.stderr.strip():
                 print(f"Error: {result.stderr.strip()}")
         return result.returncode == 0
     except subprocess.TimeoutExpired:
-        print("❌ Command timed out")
+        print("[ERROR] Command timed out")
         return False
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         return False
 
 def main():
@@ -65,7 +65,7 @@ def main():
 
     # Method 3: If force reinstall fails, try user install
     if not success:
-        print("\n🔄 Trying user-local installation...")
+        print("\nRefresh Trying user-local installation...")
         success = run_command(
             [sys.executable, "-m", "pip", "install", "--user", "--force-reinstall"] + packages,
             "Installing to user directory"
@@ -73,7 +73,7 @@ def main():
 
     # Method 4: Clear cache and reinstall
     if not success:
-        print("\n🔄 Clearing pip cache and reinstalling...")
+        print("\nRefresh Clearing pip cache and reinstalling...")
         run_command(
             [sys.executable, "-m", "pip", "cache", "purge"],
             "Clearing pip cache"
@@ -102,9 +102,9 @@ def main():
     for pkg_name, import_name in package_imports.items():
         try:
             __import__(import_name)
-            print(f"✅ {pkg_name}: Working")
+            print(f"[OK] {pkg_name}: Working")
         except ImportError as e:
-            print(f"❌ {pkg_name}: Still missing - {e}")
+            print(f"[ERROR] {pkg_name}: Still missing - {e}")
             all_good = False
 
     print(f"\n{'='*50}")
@@ -112,7 +112,7 @@ def main():
         print("🎉 SUCCESS! All packages are now available.")
         print("You can now run: python3 run_streamlit.py")
     else:
-        print("⚠️  Some packages are still missing.")
+        print("[WARNING]  Some packages are still missing.")
         print("Try running: python3 diagnose_env.py for more detailed analysis")
 
         print("\nManual installation options:")

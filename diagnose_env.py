@@ -29,27 +29,27 @@ def check_streamlit_python():
         result = subprocess.run([sys.executable, "-c", "import streamlit; print('Streamlit available in current Python')"],
                               capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
-            print("✅ Streamlit available in current Python")
+            print("[OK] Streamlit available in current Python")
         else:
-            print("❌ Streamlit NOT available in current Python")
+            print("[ERROR] Streamlit NOT available in current Python")
             print(f"Error: {result.stderr}")
     except Exception as e:
-        print(f"❌ Error checking Streamlit: {e}")
+        print(f"[ERROR] Error checking Streamlit: {e}")
 
     # Check streamlit command directly
     try:
         result = subprocess.run(["streamlit", "--version"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
-            print(f"✅ Streamlit command available: {result.stdout.strip()}")
+            print(f"[OK] Streamlit command available: {result.stdout.strip()}")
 
             # Check which python streamlit uses
             result = subprocess.run(["which", "streamlit"], capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 print(f"Streamlit location: {result.stdout.strip()}")
         else:
-            print("❌ Streamlit command not found")
+            print("[ERROR] Streamlit command not found")
     except Exception as e:
-        print(f"❌ Error checking streamlit command: {e}")
+        print(f"[ERROR] Error checking streamlit command: {e}")
 
 def check_package_availability():
     """Check availability of required packages."""
@@ -68,9 +68,9 @@ def check_package_availability():
     for package in required_packages:
         try:
             __import__(package.replace('-', '_'))
-            print(f"✅ {package}: Available")
+            print(f"[OK] {package}: Available")
         except ImportError as e:
-            print(f"❌ {package}: Missing - {e}")
+            print(f"[ERROR] {package}: Missing - {e}")
 
 def check_pip_info():
     """Check pip installation info."""
@@ -83,9 +83,9 @@ def check_pip_info():
         if result.returncode == 0:
             print(f"Pip info: {result.stdout.strip()}")
         else:
-            print(f"❌ Error getting pip info: {result.stderr}")
+            print(f"[ERROR] Error getting pip info: {result.stderr}")
     except Exception as e:
-        print(f"❌ Error checking pip: {e}")
+        print(f"[ERROR] Error checking pip: {e}")
 
     # Check where packages are installed
     try:
@@ -95,9 +95,9 @@ def check_pip_info():
             print(f"\nScikit-learn installation info:")
             print(result.stdout)
         else:
-            print("❌ Scikit-learn not found via pip show")
+            print("[ERROR] Scikit-learn not found via pip show")
     except Exception as e:
-        print(f"❌ Error checking scikit-learn installation: {e}")
+        print(f"[ERROR] Error checking scikit-learn installation: {e}")
 
 def suggest_fixes():
     """Suggest potential fixes."""
@@ -138,7 +138,7 @@ def main():
     suggest_fixes()
 
     print(f"\n{'=' * 60}")
-    print("📋 SUMMARY")
+    print("Info SUMMARY")
     print('=' * 60)
     print("Share this output if you need further help!")
 

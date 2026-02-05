@@ -24,20 +24,20 @@ def check_dependencies():
     for package_name, import_name in package_imports.items():
         try:
             __import__(import_name)
-            print(f"✅ {package_name}: Available")
+            print(f"[OK] {package_name}: Available")
         except ImportError as e:
             missing_packages.append(package_name)
-            print(f"❌ {package_name}: Missing ({e})")
+            print(f"[ERROR] {package_name}: Missing ({e})")
 
     if missing_packages:
-        print(f"\n💡 INSTALLATION SOLUTIONS:")
+        print(f"\nTips INSTALLATION SOLUTIONS:")
         print(f"1. Try: {sys.executable} -m pip install {' '.join(missing_packages)}")
         print(f"2. Force reinstall: {sys.executable} -m pip install --force-reinstall {' '.join(missing_packages)}")
         print(f"3. User install: {sys.executable} -m pip install --user {' '.join(missing_packages)}")
         print(f"4. Run diagnostics: python3 diagnose_env.py")
         return False
 
-    print("✅ All core dependencies satisfied")
+    print("[OK] All core dependencies satisfied")
 
     # Check optional dependencies
     optional_packages = ['seaborn']
@@ -49,32 +49,32 @@ def check_dependencies():
             missing_optional.append(package)
 
     if missing_optional:
-        print(f"ℹ️  Optional packages not installed: {', '.join(missing_optional)}")
+        print(f"[INFO]  Optional packages not installed: {', '.join(missing_optional)}")
         print("   (Visualization will use matplotlib fallbacks)")
 
     return True
 
 def main():
     """Launch Streamlit app."""
-    print("🚀 Launching Timing-Aware Data Selection Agent Web UI...")
+    print("Actions Launching Timing-Aware Data Selection Agent Web UI...")
     print(f"Using Python: {sys.executable}")
 
     # Check dependencies
     if not check_dependencies():
-        print("\n❌ Cannot start - missing dependencies")
+        print("\n[ERROR] Cannot start - missing dependencies")
         print("\n🔍 For detailed diagnostics, run: python3 diagnose_env.py")
         sys.exit(1)
 
     # Check if Ollama is running
-    print("\n📡 Checking Ollama connection...")
+    print("\nConnection Checking Ollama connection...")
     try:
         from agent.timing_llm_config import test_ollama_connection
         if test_ollama_connection():
-            print("✅ Ollama connected")
+            print("[OK] Ollama connected")
         else:
-            print("⚠️  Ollama not connected. Start with: ollama serve")
+            print("[WARNING]  Ollama not connected. Start with: ollama serve")
     except Exception as e:
-        print(f"⚠️  Could not test Ollama: {e}")
+        print(f"[WARNING]  Could not test Ollama: {e}")
 
     # Launch Streamlit
     app_path = Path(__file__).parent / "app_ui.py"
@@ -94,13 +94,13 @@ def main():
         print(f"Running command: {' '.join(cmd[:3])} {app_path}")
         subprocess.run(cmd)
     except FileNotFoundError as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         print("Streamlit may not be installed. Try:")
         print(f"{sys.executable} -m pip install streamlit")
     except KeyboardInterrupt:
         print("\n👋 Streamlit server stopped")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"[ERROR] Unexpected error: {e}")
         print("\n🔍 Run diagnostics: python3 diagnose_env.py")
 
 if __name__ == "__main__":
