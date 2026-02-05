@@ -2,20 +2,11 @@
 LangChain-based Data Selection Agent
 Supports natural language queries for intelligent sample selection
 Terminal/CLI version - no markdown symbols
+Optimized with lazy loading to avoid circular import issues
 """
 
-import pandas as pd
-import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from sklearn.mixture import GaussianMixture
-from scipy.spatial.distance import cdist
 from typing import Dict, List, Any, Optional
 import json
-from langchain.prompts import ChatPromptTemplate
-from langchain.llms.base import LLM
-from langchain.schema import HumanMessage, SystemMessage
 import re
 
 
@@ -31,10 +22,10 @@ class DataSelectionAgent:
     5. ACT: Execute selection and explain reasoning
     """
     
-    def __init__(self, llm: LLM, verbose: bool = True):
+    def __init__(self, llm, verbose: bool = True):
         """
         Initialize the agent.
-        
+
         Args:
             llm: LangChain LLM instance (e.g., Ollama)
             verbose: Whether to print reasoning steps
@@ -44,8 +35,9 @@ class DataSelectionAgent:
         self.conversation_history = []
         self.current_data = None
         self.current_features = None
-        self.scaler = StandardScaler()
+        self.scaler = None  # Initialize when needed
         self.reasoning_log = []
+        self._imports_loaded = False
         
         # System prompt for consistency
         self.system_prompt = """You are an expert AI assistant specializing in data analysis and machine learning.
@@ -59,9 +51,38 @@ Demonstrate clear reasoning through these stages:
 
 Be analytical, transparent in your reasoning, and provide specific recommendations backed by data analysis.
 Do not use any special markdown symbols or emojis in your response."""
-    
+
+    def _load_imports(self):
+        """Load heavy imports only when needed to avoid circular import issues."""
+        if self._imports_loaded:
+            return
+
+        # Import heavy libraries here to avoid module-level circular imports
+        global pd, np, PCA, StandardScaler, KMeans, GaussianMixture, cdist
+        global ChatPromptTemplate, HumanMessage, SystemMessage
+
+        import pandas as pd
+        import numpy as np
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.cluster import KMeans
+        from sklearn.mixture import GaussianMixture
+        from scipy.spatial.distance import cdist
+
+        from langchain.prompts import ChatPromptTemplate
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+        except ImportError:
+            from langchain.schema import HumanMessage, SystemMessage
+
+        # Initialize scaler now that sklearn is loaded
+        if self.scaler is None:
+            self.scaler = StandardScaler()
+        self._imports_loaded = True
+
     def add_message(self, role: str, content: str):
         """Add message to conversation history."""
+        self._load_imports()
         self.conversation_history.append({
             'role': role,
             'content': content,
@@ -70,6 +91,7 @@ Do not use any special markdown symbols or emojis in your response."""
     
     def log_reasoning(self, stage: str, content: str):
         """Log agent reasoning."""
+        self._load_imports()
         self.reasoning_log.append({
             'stage': stage,
             'content': content,
@@ -84,9 +106,10 @@ Do not use any special markdown symbols or emojis in your response."""
     def parse_user_query(self, query: str) -> Dict[str, Any]:
         """
         Parse natural language query to extract parameters.
-        
+
         Example: "I need to select 8% of training data for this CSV file"
         """
+        self._load_imports()
         parsing_prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=f"""Parse this user query and extract data selection parameters.
@@ -147,9 +170,10 @@ Return ONLY the JSON object, nothing else.""")
         """
         Stage 1: OBSERVE - Analyze data characteristics.
         """
+        self._load_imports()
         print("\nSTAGE 1: OBSERVE")
         print("-" * 80)
-        
+
         # Load data
         self.current_data = pd.read_csv(csv_path)
         print(f"Loaded {len(self.current_data)} samples")
@@ -252,6 +276,7 @@ Use plain text only, no special symbols.""")
         """
         Stage 2: THINK - Reason about selection strategy.
         """
+        self._load_imports()
         print("\nSTAGE 2: THINK")
         print("-" * 80)
         
@@ -307,6 +332,7 @@ Provide 3-4 sentences of strategic reasoning. Use plain text only.""")
         """
         Stage 3: DECIDE - Choose specific parameters and execute.
         """
+        self._load_imports()
         print("\nSTAGE 3: DECIDE")
         print("-" * 80)
         
@@ -445,6 +471,7 @@ Use plain text only, no special symbols.""")
         """
         Stage 4: ACT - Execute selection.
         """
+        self._load_imports()
         print("\nSTAGE 4: ACT")
         print("-" * 80)
         
@@ -556,14 +583,15 @@ Use plain text only, no special symbols.""")
     def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
         """
         Main entry point - orchestrate entire selection workflow.
-        
+
         Args:
             user_query: Natural language query
             csv_path: Path to CSV file
-            
+
         Returns:
             Complete results with all stages
         """
+        self._load_imports()
         print("\n" + "=" * 80)
         print("DATA SELECTION AGENT - LangChain Powered")
         print("=" * 80)
