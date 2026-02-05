@@ -9,25 +9,32 @@ from pathlib import Path
 
 def check_dependencies():
     """Check if required packages are installed."""
-    required_packages = [
-        'streamlit',
-        'pandas',
-        'numpy',
-        'matplotlib',
-        'scikit-learn',
-        'langchain'
-    ]
+    # Map package names to their import names
+    package_imports = {
+        'streamlit': 'streamlit',
+        'pandas': 'pandas',
+        'numpy': 'numpy',
+        'matplotlib': 'matplotlib',
+        'scikit-learn': 'sklearn',  # Important: scikit-learn imports as 'sklearn'
+        'langchain': 'langchain',
+        'python-dotenv': 'dotenv'
+    }
 
     missing_packages = []
-    for package in required_packages:
+    for package_name, import_name in package_imports.items():
         try:
-            __import__(package.replace('-', '_'))
-        except ImportError:
-            missing_packages.append(package)
+            __import__(import_name)
+            print(f"✅ {package_name}: Available")
+        except ImportError as e:
+            missing_packages.append(package_name)
+            print(f"❌ {package_name}: Missing ({e})")
 
     if missing_packages:
-        print(f"❌ Missing packages: {', '.join(missing_packages)}")
-        print(f"Install with: pip install {' '.join(missing_packages)}")
+        print(f"\n💡 INSTALLATION SOLUTIONS:")
+        print(f"1. Try: {sys.executable} -m pip install {' '.join(missing_packages)}")
+        print(f"2. Force reinstall: {sys.executable} -m pip install --force-reinstall {' '.join(missing_packages)}")
+        print(f"3. User install: {sys.executable} -m pip install --user {' '.join(missing_packages)}")
+        print(f"4. Run diagnostics: python3 diagnose_env.py")
         return False
 
     print("✅ All core dependencies satisfied")
@@ -50,9 +57,12 @@ def check_dependencies():
 def main():
     """Launch Streamlit app."""
     print("🚀 Launching Timing-Aware Data Selection Agent Web UI...")
+    print(f"Using Python: {sys.executable}")
 
     # Check dependencies
     if not check_dependencies():
+        print("\n❌ Cannot start - missing dependencies")
+        print("\n🔍 For detailed diagnostics, run: python3 diagnose_env.py")
         sys.exit(1)
 
     # Check if Ollama is running
@@ -70,17 +80,28 @@ def main():
     app_path = Path(__file__).parent / "app_ui.py"
 
     print(f"\n🌐 Starting Streamlit at: http://localhost:8501")
+    print(f"App file: {app_path}")
     print("Press Ctrl+C to stop the server\n")
 
     try:
-        subprocess.run([
+        # Use explicit python executable to ensure same environment
+        cmd = [
             sys.executable, "-m", "streamlit", "run", str(app_path),
             "--theme.base=light",
             "--theme.primaryColor=#1f4e79",
             "--theme.backgroundColor=#ffffff"
-        ])
+        ]
+        print(f"Running command: {' '.join(cmd[:3])} {app_path}")
+        subprocess.run(cmd)
+    except FileNotFoundError as e:
+        print(f"❌ Error: {e}")
+        print("Streamlit may not be installed. Try:")
+        print(f"{sys.executable} -m pip install streamlit")
     except KeyboardInterrupt:
         print("\n👋 Streamlit server stopped")
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        print("\n🔍 Run diagnostics: python3 diagnose_env.py")
 
 if __name__ == "__main__":
     main()
