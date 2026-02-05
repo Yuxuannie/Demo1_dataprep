@@ -14,7 +14,6 @@ def check_dependencies():
         'pandas',
         'numpy',
         'matplotlib',
-        'seaborn',
         'scikit-learn',
         'langchain'
     ]
@@ -31,7 +30,21 @@ def check_dependencies():
         print(f"Install with: pip install {' '.join(missing_packages)}")
         return False
 
-    print("✅ All dependencies satisfied")
+    print("✅ All core dependencies satisfied")
+
+    # Check optional dependencies
+    optional_packages = ['seaborn']
+    missing_optional = []
+    for package in optional_packages:
+        try:
+            __import__(package)
+        except ImportError:
+            missing_optional.append(package)
+
+    if missing_optional:
+        print(f"ℹ️  Optional packages not installed: {', '.join(missing_optional)}")
+        print("   (Visualization will use matplotlib fallbacks)")
+
     return True
 
 def main():

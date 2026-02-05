@@ -4,7 +4,6 @@ Provides visual proof of clustering effectiveness and sample selection quality
 """
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
@@ -13,9 +12,17 @@ from typing import Dict, List, Any, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
+# Optional seaborn import with fallback
+try:
+    import seaborn as sns
+    HAS_SEABORN = True
+    sns.set_palette("husl")
+except ImportError:
+    HAS_SEABORN = False
+    print("Warning: seaborn not available. Using matplotlib styling instead.")
+
 # Set professional plotting style
 plt.style.use('default')
-sns.set_palette("husl")
 
 class TimingVisualizationDashboard:
     """
@@ -214,9 +221,30 @@ class TimingVisualizationDashboard:
             # Create heatmap with professional styling
             mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))  # Mask upper triangle
 
-            sns.heatmap(correlation_matrix, mask=mask, ax=ax, cmap='RdBu_r', center=0,
-                       annot=True, fmt='.2f', square=True, linewidths=0.5,
-                       cbar_kws={'shrink': 0.8, 'label': 'Correlation Coefficient'})
+            if HAS_SEABORN:
+                sns.heatmap(correlation_matrix, mask=mask, ax=ax, cmap='RdBu_r', center=0,
+                           annot=True, fmt='.2f', square=True, linewidths=0.5,
+                           cbar_kws={'shrink': 0.8, 'label': 'Correlation Coefficient'})
+            else:
+                # Fallback using matplotlib
+                masked_corr = np.ma.masked_array(correlation_matrix, mask)
+                im = ax.imshow(masked_corr, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
+
+                # Add text annotations
+                for i in range(len(correlation_matrix)):
+                    for j in range(len(correlation_matrix.columns)):
+                        if not mask[i, j]:
+                            ax.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                                   ha="center", va="center", fontsize=8)
+
+                # Set labels and ticks
+                ax.set_xticks(range(len(correlation_matrix.columns)))
+                ax.set_yticks(range(len(correlation_matrix)))
+                ax.set_xticklabels(correlation_matrix.columns, rotation=45, ha='right', fontsize=8)
+                ax.set_yticklabels(correlation_matrix.index, fontsize=8)
+
+                # Add colorbar
+                plt.colorbar(im, ax=ax, shrink=0.8, label='Correlation Coefficient')
 
             ax.set_title('Timing Feature Correlations\n(Justifies PCA & Clustering)', fontsize=12, fontweight='bold')
             ax.set_xlabel('Timing Features', fontsize=11)
@@ -289,7 +317,7 @@ class TimingVisualizationDashboard:
             if len(selected_data) > 0:
                 ax.hist(selected_data, bins=30, alpha=0.8, color=self.colors['selected'],
                        label=f'Selected Samples (n={len(selected_data):,})', density=True,
-                       edgecolor='darkred', linewidth=1, histtype='step', linewidth=2)
+                       edgecolor='darkred', linewidth=2, histtype='step')
 
             # Add statistical markers
             all_mean = all_data.mean()
