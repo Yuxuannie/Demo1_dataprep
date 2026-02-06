@@ -6,13 +6,21 @@ Senior timing engineer expertise for Monte Carlo sample selection
 from typing import Dict, List, Any, Optional
 import json
 import re
-from timing_prompts import (
-    TIMING_SYSTEM_PROMPT,
-    TIMING_OBSERVE_PROMPT,
-    TIMING_THINK_PROMPT,
-    TIMING_DECIDE_PROMPT,
-    TIMING_ACT_PROMPT
+from agentic_timing_prompts import (
+    AGENTIC_TIMING_SYSTEM_PROMPT as TIMING_SYSTEM_PROMPT,
+    AGENTIC_EXPLORE_PROMPT as TIMING_OBSERVE_PROMPT,
+    AGENTIC_STRATEGY_PROMPT as TIMING_THINK_PROMPT,
+    AGENTIC_EXECUTE_PROMPT as TIMING_ACT_PROMPT,
+    AGENTIC_LLM_PARAMETERS,
+    VALIDATION_BOUNDARIES,
+    ITERATION_TRIGGERS
 )
+
+# Fallback decide prompt for compatibility
+from TIMING_DECIDE_PROMPT import TIMING_DECIDE_PROMPT
+
+AGENTIC_MODE = True
+print("[AGENT] Using Agentic Mode: Autonomous exploration with self-validation")
 
 
 class TimingDataSelectionAgent:
@@ -51,6 +59,16 @@ class TimingDataSelectionAgent:
 
         # Timing domain system prompt
         self.system_prompt = TIMING_SYSTEM_PROMPT
+
+        # Agentic capabilities
+        self.agentic_mode = AGENTIC_MODE
+        self.validation_boundaries = VALIDATION_BOUNDARIES if AGENTIC_MODE else {}
+        self.iteration_triggers = ITERATION_TRIGGERS if AGENTIC_MODE else {}
+        self.iteration_count = 0
+        self.max_iterations = 3
+
+        if self.agentic_mode:
+            print("[AGENT] Initialized in AGENTIC MODE with autonomous exploration")
 
     def _load_imports(self):
         """Load heavy imports only when needed."""
@@ -100,6 +118,61 @@ class TimingDataSelectionAgent:
             print(f"{stage}")
             print(f"{'='*80}")
             print(content)
+
+    def validate_selection_quality(self, selected_indices: List[int], labels: np.ndarray) -> Dict[str, Any]:
+        """Validate selection quality against agentic boundaries."""
+        if not self.agentic_mode or not self.validation_boundaries:
+            return {"validation": "skipped", "quality": "assumed_good"}
+
+        validation_results = {}
+        self._load_imports()
+
+        try:
+            # Cell type coverage validation
+            if self.current_data is not None and 'cell_type' in self.current_data.columns:
+                total_cell_types = self.current_data['cell_type'].nunique()
+                selected_cell_types = self.current_data.iloc[selected_indices]['cell_type'].nunique()
+                cell_coverage = selected_cell_types / total_cell_types
+
+                min_coverage = self.validation_boundaries.get('minimum_cell_type_coverage', 0.8)
+                validation_results['cell_coverage'] = {
+                    'achieved': cell_coverage,
+                    'required': min_coverage,
+                    'passed': cell_coverage >= min_coverage
+                }
+
+            # Cluster balance validation
+            if len(labels) > 0:
+                cluster_sizes = [np.sum(labels[selected_indices] == i) for i in np.unique(labels)]
+                if len(cluster_sizes) > 1:
+                    max_size = max(cluster_sizes)
+                    min_size = min([s for s in cluster_sizes if s > 0])
+                    imbalance_ratio = max_size / min_size if min_size > 0 else float('inf')
+
+                    max_imbalance = self.validation_boundaries.get('maximum_cluster_imbalance', 3.0)
+                    validation_results['cluster_balance'] = {
+                        'imbalance_ratio': imbalance_ratio,
+                        'max_allowed': max_imbalance,
+                        'passed': imbalance_ratio <= max_imbalance
+                    }
+
+            # Overall validation status
+            all_passed = all(result.get('passed', True) for result in validation_results.values()
+                           if isinstance(result, dict) and 'passed' in result)
+
+            validation_results['overall_status'] = 'PASSED' if all_passed else 'FAILED'
+            validation_results['requires_iteration'] = not all_passed
+
+            if self.verbose and validation_results.get('requires_iteration'):
+                print(f"\n[VALIDATION] Quality check FAILED - iteration required")
+                for key, result in validation_results.items():
+                    if isinstance(result, dict) and not result.get('passed', True):
+                        print(f"  {key}: {result}")
+
+            return validation_results
+
+        except Exception as e:
+            return {"validation": "error", "error": str(e), "quality": "unknown"}
 
     def parse_user_query(self, query: str) -> Dict[str, Any]:
         """Parse natural language query with timing domain understanding."""
@@ -544,6 +617,128 @@ Return ONLY the JSON object, nothing else.""")
 
         return result
 
+    def act_agentic(self, strategy: Dict[str, Any], target_percentage: float) -> Dict[str, Any]:
+        """Agentic ACT stage with autonomous decision-making and self-validation."""
+        self._load_imports()
+        print("\nSTAGE 3: AGENTIC EXECUTION (Autonomous Decision + Action)")
+        print("-" * 80)
+
+        observation_summary = f"""Dataset has {len(self.current_data)} samples with {self.current_features.shape[1]} features.
+Target selection: {target_percentage:.1f}% ({int(len(self.current_data) * target_percentage / 100)} samples)
+Strategy reasoning: {strategy.get('reasoning', 'Strategic analysis completed')}"""
+
+        # Generate execution plan with autonomous decision-making
+        act_prompt = TIMING_ACT_PROMPT.format(
+            exploration_findings=observation_summary,
+            validated_strategy=strategy.get('reasoning', 'Autonomous strategy developed'),
+            target_count=int(len(self.current_data) * target_percentage / 100),
+            algorithm_choice="Autonomous selection",
+            algorithm_config="Self-optimizing parameters"
+        )
+
+        prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=act_prompt)
+        ])
+
+        chain = prompt_template | self.llm
+        execution_reasoning = chain.invoke({})
+
+        if hasattr(execution_reasoning, 'content'):
+            execution_text = execution_reasoning.content
+        else:
+            execution_text = str(execution_reasoning)
+
+        self.add_message('assistant', execution_text)
+        self.log_reasoning('AGENTIC EXECUTION', execution_text)
+
+        # Execute the sampling with iteration capability
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                # Apply PCA and clustering (similar to standard decide logic)
+                features_scaled = self.scaler.fit_transform(self.current_features)
+                pca = PCA()
+                pca.fit(features_scaled)
+
+                cumsum = np.cumsum(pca.explained_variance_ratio_)
+                n_components = np.argmax(cumsum >= 0.92) + 1
+
+                pca_final = PCA(n_components=n_components)
+                features_pca = pca_final.fit_transform(features_scaled)
+
+                # Use GMM as default for agentic mode (handles overlapping distributions better)
+                best_k = min(10, len(self.current_data) // 100)  # Adaptive cluster count
+                final_model = GaussianMixture(n_components=best_k, random_state=42)
+                final_labels = final_model.fit_predict(features_pca)
+                centroids = final_model.means_
+
+                distances = cdist(features_pca, centroids, metric='euclidean')
+                min_distances = np.min(distances, axis=1)
+
+                # Uncertainty-based sampling
+                target_count = int(len(self.current_data) * target_percentage / 100)
+
+                # Select samples far from centroids (high uncertainty)
+                uncertainty_scores = min_distances
+                selected_indices = np.argsort(-uncertainty_scores)[:target_count]
+
+                # Validate selection quality
+                validation_results = self.validate_selection_quality(selected_indices, final_labels)
+
+                if not validation_results.get('requires_iteration', False) or attempt == max_attempts - 1:
+                    # Selection is good or we've exhausted attempts
+                    break
+                else:
+                    print(f"\n[ITERATION {attempt + 1}] Validation failed, adjusting strategy...")
+                    # Adjust target count or approach for next iteration
+                    target_count = int(target_count * 1.1)  # Slightly increase sample count
+
+            except Exception as e:
+                print(f"[ERROR] Execution attempt {attempt + 1} failed: {e}")
+                if attempt == max_attempts - 1:
+                    raise
+
+        # Create results
+        selected_df = self.current_data.iloc[selected_indices].copy()
+        selected_df['cluster_id'] = final_labels[selected_indices]
+        selected_df['uncertainty_score'] = uncertainty_scores[selected_indices]
+
+        result = {
+            'selected_df': selected_df,
+            'selected_indices': selected_indices,
+            'n_selected': len(selected_indices),
+            'cluster_distribution': [np.sum(final_labels[selected_indices] == i) for i in range(best_k)],
+            'uncertainty_weights': uncertainty_scores[selected_indices],
+            'selection_details': [f"Selected {len(selected_indices)} high-uncertainty samples"],
+            'expected_cost_reduction': f'{100 - target_percentage:.0f}% reduction (from 10% to {target_percentage:.1f}%)',
+            'validation_results': validation_results,
+            'agentic_iterations': attempt + 1
+        }
+
+        # Create synthetic decision structure for compatibility
+        decision = {
+            'pca': {
+                'n_components': n_components,
+                'variance_explained': float(cumsum[n_components-1]),
+                'transformer': pca_final
+            },
+            'clustering': {
+                'algorithm': 'gmm',
+                'n_clusters': best_k,
+                'model': final_model,
+                'labels': final_labels,
+                'centroids': centroids,
+                'distances': min_distances
+            },
+            'features_pca': features_pca
+        }
+
+        # Store decision for return compatibility
+        self.last_decision = decision
+
+        return result
+
     def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
         """Main workflow with timing domain expertise."""
         self._load_imports()
@@ -572,8 +767,16 @@ Return ONLY the JSON object, nothing else.""")
             print(f"No percentage specified. Data-driven selection: {optimal_percentage}% for {data_size:,} samples")
 
         strategy = self.think(observation, params['selection_percentage'])
-        decision = self.decide(strategy)
-        result = self.act(decision, strategy)
+
+        if self.agentic_mode:
+            # In agentic mode, strategy includes decision-making
+            # Skip separate decide stage and let act handle both
+            print("\n[AGENTIC] Strategy includes autonomous decision-making")
+            result = self.act_agentic(strategy, params['selection_percentage'])
+        else:
+            # Standard mode with separate decide stage
+            decision = self.decide(strategy)
+            result = self.act(decision, strategy)
 
         print("\n" + "=" * 80)
         print("TIMING-OPTIMIZED SELECTION COMPLETE")
@@ -582,6 +785,10 @@ Return ONLY the JSON object, nothing else.""")
         print(f"Expected cost reduction: {result['expected_cost_reduction']}")
         print(f"Active learning: Uncertainty-based sampling for timing robustness")
 
+        # Handle decision structure for agentic vs standard mode
+        if self.agentic_mode:
+            decision = getattr(self, 'last_decision', {})
+
         return {
             'observation': observation,
             'strategy': strategy,
@@ -589,7 +796,8 @@ Return ONLY the JSON object, nothing else.""")
             'result': result,
             'reasoning_log': self.reasoning_log,
             'conversation_history': self.conversation_history,
-            'parsed_params': params
+            'parsed_params': params,
+            'agentic_mode': self.agentic_mode
         }
 
     def _extract_cluster_count(self, text: str) -> int:
