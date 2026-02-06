@@ -338,16 +338,20 @@ Return ONLY the JSON object, nothing else.""")
         # Generate timing domain observation with ACTUAL DATA
         target_count = int(observation['total_samples'] * target_percentage / 100)
 
-        observe_prompt = TIMING_OBSERVE_PROMPT.format(
-            total_samples=observation['total_samples'],
-            target_count=target_count,
-            target_percentage=target_percentage,
-            n_features=observation['n_features'],
-            n_cell_types=len(observation['cell_types']),
-            calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
-            correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
-            sigma_analysis=sigma_analysis
-        )
+        try:
+            observe_prompt = TIMING_OBSERVE_PROMPT.format(
+                total_samples=observation['total_samples'],
+                target_count=target_count,
+                target_percentage=target_percentage,
+                n_features=observation['n_features'],
+                n_cell_types=len(observation['cell_types']),
+                calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
+                correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
+                sigma_analysis=sigma_analysis
+            )
+        except KeyError as e:
+            print(f"[ERROR] Missing parameter in OBSERVE prompt: {e}")
+            observe_prompt = f"Analyze this timing dataset with {observation['total_samples']} samples for {target_percentage}% selection."
 
         prompt_template = ChatPromptTemplate.from_messages([
             SystemMessage(content=self.system_prompt),
@@ -388,9 +392,21 @@ Key Findings: This dataset shows {'high' if len(observation['high_correlations']
 and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type diversity, suggesting
 {'advanced clustering strategies' if len(observation['high_correlations']) > 3 else 'standard sampling approaches'} may be optimal."""
 
-        think_prompt = TIMING_THINK_PROMPT.format(
-            exploration_findings=exploration_findings
-        )
+        # Debug: Print parameters being passed
+        if self.verbose:
+            print(f"[DEBUG] Formatting THINK prompt with:")
+            print(f"  - exploration_findings length: {len(exploration_findings)}")
+            print(f"  - target_count: {target_count}")
+
+        try:
+            think_prompt = TIMING_THINK_PROMPT.format(
+                exploration_findings=exploration_findings,
+                target_count=target_count
+            )
+        except KeyError as e:
+            print(f"[ERROR] Missing parameter in THINK prompt: {e}")
+            # Provide fallback prompt without formatting
+            think_prompt = f"Develop a sampling strategy for {target_count} samples from this timing dataset. Use the exploration findings to guide your approach."
 
         prompt_template = ChatPromptTemplate.from_messages([
             SystemMessage(content=self.system_prompt),
@@ -646,14 +662,18 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         # Generate execution plan with autonomous decision-making
         target_count = int(len(self.current_data) * target_percentage / 100)
 
-        act_prompt = TIMING_ACT_PROMPT.format(
-            exploration_findings=strategy.get('exploration_findings', 'Dataset exploration completed'),
-            validated_strategy=strategy.get('reasoning', 'Autonomous strategy developed'),
-            target_count=target_count,
-            total_samples=len(self.current_data),
-            algorithm_choice="Autonomous GMM clustering",
-            algorithm_config="Adaptive parameters with self-validation"
-        )
+        try:
+            act_prompt = TIMING_ACT_PROMPT.format(
+                exploration_findings=strategy.get('exploration_findings', 'Dataset exploration completed'),
+                validated_strategy=strategy.get('reasoning', 'Autonomous strategy developed'),
+                target_count=target_count,
+                total_samples=len(self.current_data),
+                algorithm_choice="Autonomous GMM clustering",
+                algorithm_config="Adaptive parameters with self-validation"
+            )
+        except KeyError as e:
+            print(f"[ERROR] Missing parameter in ACT prompt: {e}")
+            act_prompt = f"Execute sampling strategy to select {target_count} samples from {len(self.current_data)} total samples."
 
         prompt_template = ChatPromptTemplate.from_messages([
             SystemMessage(content=self.system_prompt),
