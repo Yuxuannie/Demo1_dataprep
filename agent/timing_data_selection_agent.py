@@ -3,11 +3,13 @@ Timing-Aware Data Selection Agent
 Senior timing engineer expertise for Monte Carlo sample selection
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Union
+from enum import Enum
 import json
 import re
 import numpy as np
 import pandas as pd
+import os
 
 # Import core ML libraries at module level to avoid import errors
 try:
@@ -20,6 +22,27 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
     print("[WARNING] scikit-learn not available - some features may not work")
+
+# Import visualization libraries
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    print("[WARNING] Plotly not available - will use fallback visualization")
+
+
+# Intent Classification System
+class UserIntent(Enum):
+    """User intent categories for conversational Q&A."""
+    EXECUTE_SAMPLING = "execute_sampling"
+    QUESTION_ABOUT_RESULTS = "question_about_results"
+    MODIFY_PARAMETERS = "modify_parameters"
+    EXPLAIN_METHODOLOGY = "explain_methodology"
+    REQUEST_VISUALIZATION = "request_visualization"
+    GENERAL_HELP = "general_help"
 from agentic_timing_prompts import (
     AGENTIC_TIMING_SYSTEM_PROMPT as TIMING_SYSTEM_PROMPT,
     AGENTIC_EXPLORE_PROMPT as TIMING_OBSERVE_PROMPT,
@@ -860,3 +883,575 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
     def get_conversation_history(self) -> List[Dict[str, Any]]:
         """Get conversation history."""
         return self.conversation_history
+
+    # SAFE ALLOCATION METHODS
+    def safe_int(self, value: Union[int, float, str, None], default: int = 0) -> int:
+        """Convert any value to safe integer, defaulting to 0 for None/invalid values."""
+        if value is None:
+            return default
+        try:
+            if isinstance(value, str):
+                # Extract numbers from string responses like "30 samples" or "None allocated"
+                numbers = re.findall(r'\d+', value)
+                return int(numbers[0]) if numbers else default
+            return max(0, int(float(value)))  # Ensure non-negative
+        except (ValueError, TypeError):
+            return default
+
+    def safe_sample_allocation(self, strategy_results: Dict[str, Any], total_target: int) -> Dict[str, int]:
+        """Safely allocate samples across different strategies with None-type protection."""
+
+        # Define all possible allocation strategies
+        allocation_strategies = [
+            'grid_sampling',
+            'uncertainty_sampling',
+            'boundary_sampling',
+            'sparse_region_exploration',
+            'validation_holdout',
+            'representative_coverage',
+            'corner_case_sampling'
+        ]
+
+        # Extract and safely convert all allocations
+        safe_allocations = {}
+        total_allocated = 0
+
+        for strategy in allocation_strategies:
+            raw_value = strategy_results.get(strategy, 0)
+            safe_count = self.safe_int(raw_value, 0)
+            safe_allocations[strategy] = safe_count
+            total_allocated += safe_count
+
+        # Handle over/under allocation
+        if total_allocated > total_target:
+            print(f"[WARNING] Over-allocation detected: {total_allocated} > {total_target}")
+            # Proportionally reduce all non-zero allocations
+            scale_factor = total_target / total_allocated
+            for strategy in safe_allocations:
+                if safe_allocations[strategy] > 0:
+                    safe_allocations[strategy] = max(1, int(safe_allocations[strategy] * scale_factor))
+
+            # Recalculate total after scaling
+            total_allocated = sum(safe_allocations.values())
+
+        # Handle under-allocation by adding to largest strategy
+        if total_allocated < total_target:
+            remaining = total_target - total_allocated
+            largest_strategy = max(safe_allocations.keys(), key=lambda k: safe_allocations[k])
+            safe_allocations[largest_strategy] += remaining
+            print(f"[INFO] Added {remaining} samples to {largest_strategy} to reach target")
+
+        # Final validation
+        final_total = sum(safe_allocations.values())
+        assert final_total == total_target, f"Allocation error: {final_total} != {total_target}"
+
+        return safe_allocations
+
+    # INTENT CLASSIFICATION METHODS
+    def classify_user_intent(self, user_input: str) -> Tuple[UserIntent, Dict[str, Any]]:
+        """Classify user intent to determine whether to execute pipeline or answer from context."""
+
+        input_lower = user_input.lower().strip()
+
+        # Intent patterns with priorities (most specific first)
+        intent_patterns = {
+            UserIntent.QUESTION_ABOUT_RESULTS: [
+                r'why did you (choose|pick|select)',
+                r'why.*(\\d+)%',
+                r'explain (the|your) (selection|choice|decision)',
+                r'how did you (decide|determine)',
+                r'what.*reasoning.*behind',
+                r'justify.*selection',
+                r'(why|how).*samples',
+                r'rationale.*for'
+            ],
+
+            UserIntent.MODIFY_PARAMETERS: [
+                r'change.*to.*(\\d+)%',
+                r'try.*(\\d+)%.*instead',
+                r'use.*(\\d+).*samples',
+                r'increase.*to.*(\\d+)',
+                r'decrease.*to.*(\\d+)',
+                r'modify.*percentage',
+                r'adjust.*selection'
+            ],
+
+            UserIntent.REQUEST_VISUALIZATION: [
+                r'show.*plot',
+                r'visuali[sz]e.*results',
+                r'generate.*dashboard',
+                r'plot.*samples',
+                r'show.*scatter',
+                r'display.*chart'
+            ],
+
+            UserIntent.EXPLAIN_METHODOLOGY: [
+                r'how does.*work',
+                r'explain.*algorithm',
+                r'what.*method.*using',
+                r'describe.*approach',
+                r'methodology'
+            ],
+
+            UserIntent.EXECUTE_SAMPLING: [
+                r'select.*(\\d+)%',
+                r'run.*sampling',
+                r'perform.*selection',
+                r'execute.*analysis',
+                r'analyze.*dataset',
+                r'sample.*(\\d+)',
+                r'choose.*samples'
+            ],
+
+            UserIntent.GENERAL_HELP: [
+                r'help',
+                r'what.*can.*do',
+                r'how.*use',
+                r'commands'
+            ]
+        }
+
+        # Check patterns in order of priority
+        for intent, patterns in intent_patterns.items():
+            for pattern in patterns:
+                match = re.search(pattern, input_lower)
+                if match:
+                    # Extract parameters from match
+                    params = self._extract_intent_parameters(user_input, match)
+                    return intent, params
+
+        # Default to execution if no clear pattern matches
+        return UserIntent.EXECUTE_SAMPLING, {}
+
+    def _extract_intent_parameters(self, user_input: str, match: re.Match) -> Dict[str, Any]:
+        """Extract parameters from matched intent patterns."""
+        params = {}
+
+        # Extract percentages
+        percentage_matches = re.findall(r'(\\d+)%', user_input)
+        if percentage_matches:
+            params['percentage'] = int(percentage_matches[0])
+
+        # Extract sample counts
+        sample_matches = re.findall(r'(\\d+)\\s*samples?', user_input, re.IGNORECASE)
+        if sample_matches:
+            params['sample_count'] = int(sample_matches[0])
+
+        # Extract algorithm names
+        algorithm_matches = re.findall(r'(k-means|gmm|clustering)', user_input, re.IGNORECASE)
+        if algorithm_matches:
+            params['algorithm'] = algorithm_matches[0].lower()
+
+        return params
+
+    # INTERACTIVE VISUALIZATION METHODS
+    def generate_interactive_dashboard(self, df: pd.DataFrame, selected_indices: List[int],
+                                     clusters: np.ndarray, centroids: np.ndarray,
+                                     pca_components: Optional[np.ndarray] = None,
+                                     export_html: bool = True) -> Dict[str, Any]:
+        """Generate comprehensive interactive dashboard with Plotly."""
+
+        if not PLOTLY_AVAILABLE:
+            print("[WARNING] Plotly not available - using fallback visualization")
+            return self._fallback_visualization(df, selected_indices, clusters)
+
+        # Prepare data
+        dashboard_data = self._prepare_dashboard_data(df, selected_indices, clusters, pca_components)
+
+        # Create main subplot structure
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=[
+                'Sample Selection Overview (Interactive)',
+                'Cluster Quality & Coverage Analysis',
+                'Selection Statistics by Cluster',
+                'Data Distribution Validation'
+            ],
+            specs=[
+                [{"type": "scatter"}, {"type": "scatter"}],
+                [{"type": "bar"}, {"type": "histogram"}]
+            ],
+            horizontal_spacing=0.12,
+            vertical_spacing=0.12
+        )
+
+        # Add plots
+        self._add_selection_overview(fig, dashboard_data, row=1, col=1)
+        self._add_cluster_analysis(fig, dashboard_data, centroids, row=1, col=2)
+        self._add_selection_statistics(fig, dashboard_data, row=2, col=1)
+        self._add_distribution_analysis(fig, dashboard_data, row=2, col=2)
+
+        # Update layout for interactivity
+        fig.update_layout(
+            title={
+                'text': 'Agentic Timing Data Selection Dashboard',
+                'x': 0.5,
+                'font': {'size': 24, 'color': 'white'}
+            },
+            template='plotly_dark',
+            showlegend=True,
+            height=800,
+            width=1200,
+            hovermode='closest',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='#2F3542'
+        )
+
+        # Export standalone HTML if requested
+        html_path = None
+        if export_html:
+            html_path = self._export_html_dashboard(fig, dashboard_data)
+
+        return {
+            'plotly_figure': fig,
+            'dashboard_data': dashboard_data,
+            'html_export_path': html_path,
+            'interactive_features': {
+                'zoom': True,
+                'pan': True,
+                'hover_details': True,
+                'toggleable_traces': True,
+                'selection_tools': True
+            }
+        }
+
+    def _prepare_dashboard_data(self, df: pd.DataFrame, selected_indices: List[int],
+                               clusters: np.ndarray, pca_components: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        """Prepare and structure data for dashboard plotting."""
+
+        # Create selection mask
+        selection_mask = np.zeros(len(df), dtype=bool)
+        selection_mask[selected_indices] = True
+
+        # Prepare coordinate data
+        if pca_components is not None and pca_components.shape[1] >= 2:
+            x_coords = pca_components[:, 0]
+            y_coords = pca_components[:, 1]
+            coord_labels = ('PCA Component 1', 'PCA Component 2')
+        else:
+            # Use first two numeric columns as fallback
+            numeric_cols = df.select_dtypes(include=[np.number]).columns[:2]
+            x_coords = df[numeric_cols[0]].values if len(numeric_cols) > 0 else np.arange(len(df))
+            y_coords = df[numeric_cols[1]].values if len(numeric_cols) > 1 else np.random.random(len(df))
+            coord_labels = (numeric_cols[0] if len(numeric_cols) > 0 else 'Index',
+                          numeric_cols[1] if len(numeric_cols) > 1 else 'Random')
+
+        # Calculate cluster statistics
+        unique_clusters = np.unique(clusters)
+        cluster_stats = {}
+
+        for cluster_id in unique_clusters:
+            cluster_mask = clusters == cluster_id
+            selected_in_cluster = np.sum(selection_mask & cluster_mask)
+            total_in_cluster = np.sum(cluster_mask)
+
+            cluster_stats[cluster_id] = {
+                'total_samples': total_in_cluster,
+                'selected_samples': selected_in_cluster,
+                'selection_rate': selected_in_cluster / total_in_cluster if total_in_cluster > 0 else 0,
+                'cluster_size_pct': total_in_cluster / len(df) * 100
+            }
+
+        return {
+            'coordinates': {
+                'x': x_coords,
+                'y': y_coords,
+                'labels': coord_labels
+            },
+            'selection_mask': selection_mask,
+            'clusters': clusters,
+            'cluster_stats': cluster_stats,
+            'summary': {
+                'total_samples': len(df),
+                'selected_count': len(selected_indices),
+                'selection_percentage': len(selected_indices) / len(df) * 100,
+                'num_clusters': len(unique_clusters)
+            }
+        }
+
+    def _add_selection_overview(self, fig, dashboard_data: Dict, row: int, col: int):
+        """Add interactive sample selection overview plot."""
+
+        coords = dashboard_data['coordinates']
+        selection_mask = dashboard_data['selection_mask']
+        clusters = dashboard_data['clusters']
+
+        # Color palette
+        selected_color = '#FF6B6B'  # Red for selected samples
+        unselected_color = '#4ECDC4'  # Teal for unselected
+
+        # Unselected samples (background)
+        unselected_mask = ~selection_mask
+        fig.add_trace(
+            go.Scatter(
+                x=coords['x'][unselected_mask],
+                y=coords['y'][unselected_mask],
+                mode='markers',
+                marker=dict(
+                    color=clusters[unselected_mask],
+                    colorscale='Viridis',
+                    size=6,
+                    opacity=0.4,
+                    line=dict(width=1, color='white')
+                ),
+                name='Unselected',
+                hovertemplate='<b>Unselected Sample</b><br>' +
+                            f'{coords["labels"][0]}: %{{x:.3f}}<br>' +
+                            f'{coords["labels"][1]}: %{{y:.3f}}<br>' +
+                            'Cluster: %{marker.color}<extra></extra>',
+                showlegend=True
+            ),
+            row=row, col=col
+        )
+
+        # Selected samples (highlighted)
+        selected_mask = selection_mask
+        fig.add_trace(
+            go.Scatter(
+                x=coords['x'][selected_mask],
+                y=coords['y'][selected_mask],
+                mode='markers',
+                marker=dict(
+                    color=selected_color,
+                    size=10,
+                    opacity=0.8,
+                    line=dict(width=2, color='white'),
+                    symbol='diamond'
+                ),
+                name='Selected',
+                hovertemplate='<b>SELECTED Sample</b><br>' +
+                            f'{coords["labels"][0]}: %{{x:.3f}}<br>' +
+                            f'{coords["labels"][1]}: %{{y:.3f}}<br>' +
+                            'Status: Selected for analysis<extra></extra>',
+                showlegend=True
+            ),
+            row=row, col=col
+        )
+
+        # Update axes
+        fig.update_xaxes(title_text=coords['labels'][0], row=row, col=col)
+        fig.update_yaxes(title_text=coords['labels'][1], row=row, col=col)
+
+    def _add_cluster_analysis(self, fig, dashboard_data: Dict, centroids: np.ndarray, row: int, col: int):
+        """Add cluster quality and coverage analysis."""
+
+        coords = dashboard_data['coordinates']
+        clusters = dashboard_data['clusters']
+        cluster_stats = dashboard_data['cluster_stats']
+
+        # Plot cluster centers
+        unique_clusters = np.unique(clusters)
+        cluster_colors = px.colors.qualitative.Set3[:len(unique_clusters)]
+
+        for i, cluster_id in enumerate(unique_clusters):
+            cluster_mask = clusters == cluster_id
+            stats = cluster_stats[cluster_id]
+
+            # Cluster samples
+            fig.add_trace(
+                go.Scatter(
+                    x=coords['x'][cluster_mask],
+                    y=coords['y'][cluster_mask],
+                    mode='markers',
+                    marker=dict(
+                        color=cluster_colors[i],
+                        size=7,
+                        opacity=0.6,
+                        line=dict(width=1, color='white')
+                    ),
+                    name=f'Cluster {cluster_id}',
+                    hovertemplate=f'<b>Cluster {cluster_id}</b><br>' +
+                                f'{coords["labels"][0]}: %{{x:.3f}}<br>' +
+                                f'{coords["labels"][1]}: %{{y:.3f}}<br>' +
+                                f'Selected: {stats["selected_samples"]}/{stats["total_samples"]}<br>' +
+                                f'Rate: {stats["selection_rate"]:.1%}<extra></extra>',
+                    showlegend=True
+                ),
+                row=row, col=col
+            )
+
+            # Cluster centroid
+            if i < len(centroids):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[centroids[i, 0]],
+                        y=[centroids[i, 1]] if centroids.shape[1] > 1 else [0],
+                        mode='markers',
+                        marker=dict(
+                            color='black',
+                            size=15,
+                            symbol='x',
+                            line=dict(width=3, color=cluster_colors[i])
+                        ),
+                        name=f'Centroid {cluster_id}',
+                        hovertemplate=f'<b>Cluster {cluster_id} Centroid</b><br>' +
+                                    'Representative center point<extra></extra>',
+                        showlegend=False
+                    ),
+                    row=row, col=col
+                )
+
+        # Update axes
+        fig.update_xaxes(title_text=coords['labels'][0], row=row, col=col)
+        fig.update_yaxes(title_text=coords['labels'][1], row=row, col=col)
+
+    def _add_selection_statistics(self, fig, dashboard_data: Dict, row: int, col: int):
+        """Add selection statistics bar chart."""
+
+        cluster_stats = dashboard_data['cluster_stats']
+        selected_color = '#FF6B6B'
+        unselected_color = '#4ECDC4'
+
+        cluster_ids = list(cluster_stats.keys())
+        selected_counts = [stats['selected_samples'] for stats in cluster_stats.values()]
+        total_counts = [stats['total_samples'] for stats in cluster_stats.values()]
+        selection_rates = [stats['selection_rate'] * 100 for stats in cluster_stats.values()]
+
+        # Selected samples bar
+        fig.add_trace(
+            go.Bar(
+                x=[f'Cluster {cid}' for cid in cluster_ids],
+                y=selected_counts,
+                name='Selected',
+                marker_color=selected_color,
+                hovertemplate='<b>%{x}</b><br>Selected: %{y}<br>Rate: %{customdata:.1f}%<extra></extra>',
+                customdata=selection_rates
+            ),
+            row=row, col=col
+        )
+
+        # Total samples outline
+        fig.add_trace(
+            go.Bar(
+                x=[f'Cluster {cid}' for cid in cluster_ids],
+                y=total_counts,
+                name='Total Available',
+                marker=dict(
+                    color='rgba(255,255,255,0)',
+                    line=dict(color=unselected_color, width=2)
+                ),
+                hovertemplate='<b>%{x}</b><br>Total: %{y}<br>Coverage: %{customdata:.1f}%<extra></extra>',
+                customdata=[stats['cluster_size_pct'] for stats in cluster_stats.values()]
+            ),
+            row=row, col=col
+        )
+
+        # Update axes
+        fig.update_xaxes(title_text='Clusters', row=row, col=col)
+        fig.update_yaxes(title_text='Sample Count', row=row, col=col)
+
+    def _add_distribution_analysis(self, fig, dashboard_data: Dict, row: int, col: int):
+        """Add data distribution histogram."""
+
+        coords = dashboard_data['coordinates']
+        selection_mask = dashboard_data['selection_mask']
+        selected_color = '#FF6B6B'
+        unselected_color = '#4ECDC4'
+
+        # All data histogram
+        fig.add_trace(
+            go.Histogram(
+                x=coords['x'],
+                name='All Data',
+                opacity=0.5,
+                marker_color=unselected_color,
+                nbinsx=30,
+                hovertemplate='<b>All Data</b><br>Range: %{x}<br>Count: %{y}<extra></extra>'
+            ),
+            row=row, col=col
+        )
+
+        # Selected data histogram
+        fig.add_trace(
+            go.Histogram(
+                x=coords['x'][selection_mask],
+                name='Selected Data',
+                opacity=0.7,
+                marker_color=selected_color,
+                nbinsx=30,
+                hovertemplate='<b>Selected Data</b><br>Range: %{x}<br>Count: %{y}<extra></extra>'
+            ),
+            row=row, col=col
+        )
+
+        # Update axes
+        fig.update_xaxes(title_text=coords['labels'][0], row=row, col=col)
+        fig.update_yaxes(title_text='Frequency', row=row, col=col)
+
+    def _export_html_dashboard(self, fig, dashboard_data: Dict) -> str:
+        """Export interactive dashboard as standalone HTML."""
+
+        summary = dashboard_data['summary']
+        html_filename = f"timing_dashboard_{summary['selected_count']}_samples.html"
+        html_path = os.path.join(os.getcwd(), html_filename)
+
+        # Add summary annotation
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.02, y=0.98,
+            text=f"<b>Summary:</b> {summary['selected_count']:,} samples selected " +
+                 f"({summary['selection_percentage']:.1f}%) from {summary['total_samples']:,} total " +
+                 f"across {summary['num_clusters']} clusters",
+            showarrow=False,
+            font=dict(size=14, color="white"),
+            align="left",
+            bgcolor="rgba(0,0,0,0.5)",
+            bordercolor="white",
+            borderwidth=1
+        )
+
+        # Export with full interactivity
+        fig.write_html(
+            html_path,
+            include_plotlyjs=True,
+            config={
+                'displayModeBar': True,
+                'displaylogo': False,
+                'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
+                'toImageButtonOptions': {
+                    'format': 'png',
+                    'filename': 'timing_dashboard',
+                    'height': 800,
+                    'width': 1200,
+                    'scale': 2
+                }
+            }
+        )
+
+        print(f"Interactive dashboard exported: {html_path}")
+        return html_path
+
+    def _fallback_visualization(self, df: pd.DataFrame, selected_indices: List[int], clusters: np.ndarray) -> Dict[str, Any]:
+        """Fallback visualization when Plotly is not available."""
+
+        print("[INFO] Using basic fallback visualization")
+
+        # Create simple text-based summary
+        total_samples = len(df)
+        selected_count = len(selected_indices)
+        selection_percentage = selected_count / total_samples * 100
+        num_clusters = len(np.unique(clusters))
+
+        summary_text = f"""
+        TIMING DATA SELECTION SUMMARY
+        =============================
+        Total samples: {total_samples:,}
+        Selected: {selected_count:,} ({selection_percentage:.1f}%)
+        Clusters: {num_clusters}
+
+        Selection distributed across {num_clusters} timing clusters
+        using uncertainty-based sampling for critical corner coverage.
+        """
+
+        return {
+            'summary_text': summary_text,
+            'dashboard_data': {
+                'total_samples': total_samples,
+                'selected_count': selected_count,
+                'selection_percentage': selection_percentage,
+                'num_clusters': num_clusters
+            },
+            'plotly_figure': None,
+            'html_export_path': None,
+            'interactive_features': {'text_summary': True}
+        }

@@ -1,6 +1,6 @@
 """
 Streamlit Chatbox UI for Timing-Aware Data Selection Agent
-Conversational interface with continuous interaction and modification support
+Conversational interface with intent classification and interactive visualization
 """
 
 import streamlit as st
@@ -11,6 +11,7 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 import time
+from typing import Dict, Any, Tuple
 
 # Configure Streamlit page
 st.set_page_config(
@@ -289,55 +290,36 @@ def display_analysis_results(results):
 
 
 def handle_user_request(user_input, agent, csv_path):
-    """Process user request and return agent response."""
+    """Process user request with intent classification and conversational handling."""
     try:
-        # Check if this is a modification request
-        if any(keyword in user_input.lower() for keyword in ['change', 'modify', 'adjust', 'increase', 'decrease', 'different']):
-            # This is a modification request - provide guidance
-            response = f"""I understand you want to modify the analysis. Here are some examples of what you can request:
+        # Classify user intent
+        intent, params = agent.classify_user_intent(user_input)
+        print(f"[INTENT] Classified as: {intent.value}")
+        if params:
+            print(f"[PARAMS] Extracted: {params}")
 
-**Percentage Changes:**
-- "Change selection percentage to 3%"
-- "Increase to 10% for more comprehensive coverage"
-- "Reduce to 2% for faster characterization"
+        # Handle based on intent
+        if intent.value == "question_about_results":
+            return handle_results_question(user_input, agent)
 
-**Algorithm Changes:**
-- "Use K-means instead of GMM"
-- "Try different clustering approach"
+        elif intent.value == "modify_parameters":
+            return handle_parameter_modification(user_input, params, agent, csv_path)
 
-**Focus Changes:**
-- "Focus on high-variability paths only"
-- "Select more boundary cases"
-- "Emphasize timing corners"
+        elif intent.value == "request_visualization":
+            return handle_visualization_request(agent)
 
-**Analysis Scope:**
-- "Analyze only specific cell types"
-- "Focus on critical timing paths"
+        elif intent.value == "explain_methodology":
+            return handle_methodology_explanation()
 
-Please specify what you'd like to modify, and I'll rerun the analysis with your new requirements."""
+        elif intent.value == "general_help":
+            return handle_general_help()
 
-            return response, None
-
-        # Run the analysis
-        results = agent.run_selection(user_input, csv_path)
-
-        # Create response message
-        response_lines = []
-        response_lines.append(f"[OK] **Analysis Complete!**")
-        response_lines.append(f"")
-        response_lines.append(f"Selected **{results['result']['n_selected']:,}** samples from **{results['observation']['total_samples']:,}** total")
-        response_lines.append(f"Selection rate: **{results['parsed_params']['selection_percentage']:.1f}%**")
-        response_lines.append(f"Algorithm: **{results['decision']['clustering']['algorithm'].upper()}** with **{results['decision']['clustering']['n_clusters']}** clusters")
-        response_lines.append(f"Expected cost reduction: **{results['result']['expected_cost_reduction']}**")
-        response_lines.append(f"")
-        response_lines.append(f"Tips You can ask me to modify this analysis or request different parameters!")
-
-        response = "\n".join(response_lines)
-
-        return response, results
+        else:
+            # Execute sampling (default behavior)
+            return handle_execution(user_input, agent, csv_path)
 
     except Exception as e:
-        error_response = f"""[ERROR] **Analysis Error:** {str(e)}
+        error_response = f"""[ERROR] Analysis Error: {str(e)}
 
 Please check:
 - Your CSV file is properly formatted
@@ -347,6 +329,175 @@ Please check:
 Try rephrasing your request or upload a different CSV file."""
 
         return error_response, None
+
+
+def handle_results_question(user_input: str, agent) -> Tuple[str, Any]:
+    """Answer questions about previous results without re-execution."""
+    print("[Q&A] Answering from previous context...")
+
+    if not st.session_state.current_results:
+        return "No previous results to explain. Please run sampling first.", None
+
+    results = st.session_state.current_results
+
+    # Generate contextual answer
+    if 'why' in user_input.lower():
+        percentage = results['parsed_params']['selection_percentage']
+        reasoning = results.get('reasoning_log', [])
+
+        response = f"""**Why {percentage}% was selected:**
+
+**Data-Driven Analysis:**
+- Dataset size: {results['observation']['total_samples']:,} samples
+- Target efficiency: Balance between coverage and computational cost
+
+**Technical Reasoning:**"""
+        for log_entry in reasoning:
+            if log_entry['stage'] in ['THINK', 'DECIDE']:
+                response += f"\n- {log_entry['stage']}: {log_entry['content'][:200]}..."
+
+        response += f"""
+
+**Final Selection:**
+- Selected {results['result']['n_selected']:,} samples ({percentage:.1f}%)
+- Algorithm: {results['decision']['clustering']['algorithm'].upper()}
+- Clusters: {results['decision']['clustering']['n_clusters']}
+- Expected cost reduction: {results['result']['expected_cost_reduction']}"""
+
+    else:
+        # General explanation
+        response = f"""**Previous Sampling Results Summary:**
+
+- Selected: {results['result']['n_selected']:,} samples from {results['observation']['total_samples']:,} total
+- Method: {results['decision']['clustering']['algorithm'].upper()} with uncertainty-based sampling
+- Coverage: {results['decision']['clustering']['n_clusters']} clusters for timing path diversity
+- Business Impact: {results['result']['expected_cost_reduction']}
+
+**Key Decision Factors:**"""
+        for log_entry in results['reasoning_log']:
+            response += f"\n- {log_entry['stage']}: {log_entry['content'][:150]}..."
+
+    return response, None
+
+
+def handle_parameter_modification(user_input: str, params: Dict[str, Any], agent, csv_path: str) -> Tuple[str, Any]:
+    """Handle requests to modify parameters and re-run."""
+    print("[MODIFY] Parameter modification requested...")
+
+    if 'percentage' in params:
+        new_percentage = params['percentage']
+        modified_input = f"Select {new_percentage}% of timing data for analysis"
+
+        response = f"Modifying selection percentage to {new_percentage}%. Re-running analysis..."
+        results = agent.run_selection(modified_input, csv_path)
+
+        # Update session state
+        st.session_state.current_results = results
+
+        # Create response message
+        response_lines = []
+        response_lines.append(f"[MODIFIED] Analysis updated with {new_percentage}% selection")
+        response_lines.append(f"")
+        response_lines.append(f"Selected **{results['result']['n_selected']:,}** samples from **{results['observation']['total_samples']:,}** total")
+        response_lines.append(f"Selection rate: **{results['parsed_params']['selection_percentage']:.1f}%**")
+        response_lines.append(f"Algorithm: **{results['decision']['clustering']['algorithm'].upper()}** with **{results['decision']['clustering']['n_clusters']}** clusters")
+        response_lines.append(f"Expected cost reduction: **{results['result']['expected_cost_reduction']}**")
+
+        return "\n".join(response_lines), results
+    else:
+        return "Please specify what you'd like to modify (e.g., 'Change to 8%')", None
+
+
+def handle_visualization_request(agent) -> Tuple[str, Any]:
+    """Handle requests for visualization without re-execution."""
+    print("[VISUALIZATION] Generating plots from previous results...")
+
+    if not st.session_state.current_results:
+        return "No results to visualize. Please run sampling first.", None
+
+    return "Generating interactive visualization dashboard...", {
+        'visualization_requested': True,
+        'results': st.session_state.current_results
+    }
+
+
+def handle_methodology_explanation() -> Tuple[str, Any]:
+    """Explain the methodology without execution."""
+    methodology_explanation = """**Agentic Timing Data Selection Methodology:**
+
+**1. OBSERVE Stage:**
+- Analyzes dataset characteristics (correlations, variability, cell types)
+- Calculates timing-specific statistics (sigma distributions, delay patterns)
+- Identifies data complexity and clustering potential
+
+**2. THINK Stage:**
+- Develops custom sampling strategy based on data patterns
+- Compares approaches: representative vs boundary sampling
+- Considers ML model training requirements and simulation budget
+
+**3. ACT Stage:**
+- Executes uncertainty-based sampling (samples far from centroids)
+- Applies PCA for dimensionality reduction
+- Uses GMM/K-means clustering for timing path grouping
+- Validates selection quality and iterates if needed
+
+**Key Principles:**
+- Active Learning: Focus on high-uncertainty samples for model robustness
+- Timing Domain Expertise: Understand process variation and corner cases
+- Business Value: Balance simulation cost vs characterization accuracy"""
+
+    return methodology_explanation, None
+
+
+def handle_general_help() -> Tuple[str, Any]:
+    """Provide general help information."""
+    help_text = """**Available Commands:**
+
+**Execution:**
+- "Select 5% of timing data" - Run sampling analysis
+- "Analyze dataset with 8% selection" - Custom percentage
+
+**Questions & Analysis:**
+- "Why did you pick 30%?" - Explain previous decisions
+- "Explain your reasoning" - Show methodology
+- "How does uncertainty sampling work?" - Technical details
+
+**Modifications:**
+- "Change to 3%" - Modify percentage and re-run
+- "Use K-means instead" - Different algorithm
+
+**Visualization:**
+- "Show plots" - Generate interactive dashboard
+- "Visualize results" - Display sampling patterns
+
+**Context:** I maintain conversation history and can answer follow-up questions without re-running the entire analysis."""
+
+    return help_text, None
+
+
+def handle_execution(user_input: str, agent, csv_path: str) -> Tuple[str, Any]:
+    """Execute the full sampling pipeline."""
+    print("[EXECUTION] Running full sampling pipeline...")
+
+    # Run the analysis
+    results = agent.run_selection(user_input, csv_path)
+
+    # Update session state
+    st.session_state.current_results = results
+
+    # Create response message
+    response_lines = []
+    response_lines.append(f"[OK] Analysis Complete!")
+    response_lines.append(f"")
+    response_lines.append(f"Selected **{results['result']['n_selected']:,}** samples from **{results['observation']['total_samples']:,}** total")
+    response_lines.append(f"Selection rate: **{results['parsed_params']['selection_percentage']:.1f}%**")
+    response_lines.append(f"Algorithm: **{results['decision']['clustering']['algorithm'].upper()}** with **{results['decision']['clustering']['n_clusters']}** clusters")
+    response_lines.append(f"Expected cost reduction: **{results['result']['expected_cost_reduction']}**")
+    response_lines.append(f"")
+    response_lines.append(f"You can ask me to modify this analysis or request different parameters!")
+
+    response = "\n".join(response_lines)
+    return response, results
 
 
 def main():
