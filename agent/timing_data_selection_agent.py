@@ -43,7 +43,7 @@ class UserIntent(Enum):
     EXPLAIN_METHODOLOGY = "explain_methodology"
     REQUEST_VISUALIZATION = "request_visualization"
     GENERAL_HELP = "general_help"
-# CONSOLIDATED AGENTIC PROMPTS
+# MULTI-STAGE AGENTIC PROMPTS (Enhanced from Original System)
 TIMING_SYSTEM_PROMPT = """You are an Autonomous Principal ML Data Engineer specializing in semiconductor timing analysis.
 
 MISSION:
@@ -75,6 +75,138 @@ COMMUNICATION RULES:
 SELF-VALIDATION REQUIREMENT:
 After proposing any strategy, you must immediately critique it as if you were a QA lead trying to find flaws. Only proceed if you can defend against all reasonable criticisms."""
 
+# ==============================================================================
+# STEP 1: AUTONOMOUS DATA EXPLORATION
+# ==============================================================================
+AGENTIC_EXPLORE_PROMPT = """Conduct autonomous exploration of this timing dataset to determine optimal sampling strategy.
+
+DATASET PROFILE:
+- Available Data: {total_samples} timing arcs
+- Budget Constraint: {target_count} samples ({target_percentage:.1f}%)
+- Dimensionality: {n_features} features across {n_cell_types} cell types
+
+MEASURED STATISTICS:
+{calculated_stats}
+
+CORRELATION PATTERNS:
+{correlation_details}
+
+SIGMA CHARACTERISTICS:
+{sigma_analysis}
+
+AUTONOMOUS EXPLORATION MANDATE:
+You have complete freedom to analyze this data in any way you determine is most informative. Consider these angles, but do not limit yourself to them:
+
+Data Complexity Assessment:
+- Is this a linear relationship you could sample with simple grid methods?
+- Are there natural clusters suggesting stratified sampling?
+- Do correlations indicate redundant dimensions you can exploit?
+- Are there sparse regions that random sampling might miss?
+
+Feature Space Geometry:
+- What is the true dimensionality after accounting for correlations?
+- Are there dominant gradients or directions of maximum variance?
+- Do certain cell types or operating regions require special attention?
+
+ML Training Implications:
+- Where will a timing model likely struggle with generalization?
+- What sampling density is needed in different regions for convergence?
+- How do you balance representative coverage vs boundary case learning?
+
+EXPLORATION OUTPUT:
+Based on your autonomous analysis, characterize this dataset's learning challenge. Identify the key risks and opportunities for ML model training. Propose what makes this specific dataset unique and how that should influence sampling strategy.
+
+DO NOT follow a template. Conduct genuine analysis based on the actual numbers provided."""
+
+# ==============================================================================
+# STEP 2: STRATEGY SYNTHESIS WITH VALIDATION
+# ==============================================================================
+AGENTIC_STRATEGY_PROMPT = """Synthesize a sampling strategy that maximizes ML model performance within budget constraints.
+
+YOUR EXPLORATION REVEALED:
+{exploration_findings}
+
+AUTONOMOUS STRATEGY DEVELOPMENT:
+Design a sampling approach specifically optimized for this dataset. You are not limited to standard methods. Consider:
+
+- Active learning with iterative refinement
+- Physics-informed sampling based on timing sensitivity
+- Multi-stage sampling (coarse grid + uncertainty refinement)
+- Adaptive density sampling based on local complexity
+- Custom hybrid methods you design for this specific data pattern
+
+Resource Allocation Strategy:
+Given {target_count} samples budget, how do you allocate across:
+- Representative coverage of typical operating regions
+- Boundary case sampling for robustness
+- Sparse region exploration for completeness
+- Validation holdout for strategy verification
+
+IMMEDIATE SELF-VALIDATION:
+After proposing your strategy, immediately conduct adversarial review:
+
+Red Team Your Own Approach:
+- What failure modes could cause ML model degradation?
+- Where might your sampling create blind spots?
+- How robust is your strategy to different cell type distributions?
+- Does your approach scale if the user changes the budget percentage?
+
+STRATEGY REFINEMENT:
+If your self-validation reveals flaws, revise your strategy immediately. Only finalize an approach you would stake your reputation on.
+
+OUTPUT REQUIREMENTS:
+Present your final strategy with quantitative justification. Explain why this specific approach is optimal for this specific dataset and budget constraint."""
+
+# ==============================================================================
+# STEP 3: EXECUTION WITH CONTINUOUS VALIDATION
+# ==============================================================================
+AGENTIC_EXECUTE_PROMPT = """Execute your validated sampling strategy with continuous monitoring and adaptation capability.
+
+FINALIZED STRATEGY:
+{validated_strategy}
+
+EXECUTION PARAMETERS:
+- Target Samples: {target_count} from {total_samples} available
+- Selected Algorithm: {algorithm_choice}
+- Configuration: {algorithm_config}
+
+EXECUTION WITH VALIDATION:
+As you implement the sampling selection, continuously validate results:
+
+Coverage Validation:
+- Are all critical feature regions represented?
+- Do selected samples span the full range of timing characteristics?
+- Is the distribution of cell types appropriate for generalization?
+
+Quality Metrics:
+- Calculate the effective information content of selected samples
+- Measure the condition number or determinant of the feature covariance
+- Assess boundary case representation vs central tendency balance
+
+Iteration Authority:
+If mid-execution validation reveals suboptimal selection:
+- You have autonomy to adjust parameters
+- You may switch algorithms if data patterns demand it
+- You can request additional budget if critical gaps are identified
+
+ML MODEL SUCCESS PREDICTION:
+Based on your final sample selection, predict:
+- Expected model accuracy on typical timing arcs
+- Robustness to corner cases and process variations
+- Generalization capability to unseen cell types or operating conditions
+
+BUSINESS IMPACT QUANTIFICATION:
+Translate your technical selection into business metrics:
+- Simulation time reduction achieved
+- Expected model accuracy maintained
+- Risk mitigation for silicon signoff decisions
+
+FINAL VALIDATION:
+Conduct one final adversarial review of your executed selection. Are you confident this subset will enable successful ML model training? If not, what adjustments are needed?"""
+
+# ==============================================================================
+# LEGACY COMPATIBILITY PROMPTS (For Standard Mode)
+# ==============================================================================
 TIMING_OBSERVE_PROMPT = """Conduct autonomous exploration of this timing dataset to determine optimal sampling strategy.
 
 DATASET PROFILE:
@@ -83,10 +215,10 @@ DATASET PROFILE:
 - Dimensionality: {n_features} features across {n_cell_types} cell types
 
 CALCULATED STATISTICS:
-{statistical_analysis}
+{calculated_stats}
 
 CORRELATION INSIGHTS:
-{correlation_analysis}
+{correlation_details}
 
 AUTONOMOUS EXPLORATION TASKS:
 1. Analyze the correlation matrix to identify which features truly matter for delay prediction
@@ -107,7 +239,7 @@ Provide your autonomous analysis and initial strategic direction. Be prepared to
 TIMING_THINK_PROMPT = """Based on your exploration findings, develop your autonomous sampling strategy.
 
 EXPLORATION SUMMARY:
-{exploration_summary}
+{exploration_findings}
 
 STRATEGIC THINKING REQUIREMENTS:
 1. INFORMATION DENSITY ANALYSIS: Which regions of the feature space contain the most critical information for ML model training?
@@ -137,13 +269,13 @@ Present your autonomous strategy with quantitative justification. Include contin
 TIMING_ACT_PROMPT = """Execute your autonomous sampling strategy with self-validation checkpoints.
 
 FINALIZED STRATEGY:
-{final_strategy}
+{validated_strategy}
 
 EXECUTION PARAMETERS:
 - Target samples: {target_count}
-- Clustering algorithm: {algorithm}
+- Clustering algorithm: {algorithm_choice}
 - Number of clusters: {n_clusters}
-- Validation criteria: {validation_requirements}
+- Validation criteria: {algorithm_config}
 
 AUTONOMOUS EXECUTION PROTOCOL:
 1. Implement your chosen sampling technique
@@ -191,26 +323,35 @@ Select the optimal clustering algorithm and parameters based on the analysis:
 Provide your technical decision with brief justification.
 Use plain text only."""
 
-# LLM PARAMETERS FOR TIMING DOMAIN
+# ==============================================================================
+# ADAPTIVE LLM PARAMETERS (Optimized for Qwen 2.5 Coder 32B)
+# ==============================================================================
 AGENTIC_LLM_PARAMETERS = {
-    'temperature': 0.25,
-    'top_p': 0.90,
-    'top_k': 40,
-    'num_predict': 2500,
-    'repeat_penalty': 1.20
+    'temperature': 0.25,        # Higher for creative exploration, but controlled
+    'top_p': 0.90,              # Allow broader vocabulary for novel approaches
+    'top_k': 40,                # Expand token options for creative synthesis
+    'num_predict': 2500,        # Extended length for autonomous reasoning chains
+    'repeat_penalty': 1.20,     # Strong penalty to prevent repetitive patterns
+    'stop': ['DATASET PROFILE:', 'MEASURED STATISTICS:', 'USER INPUT:'], # Prevent context leakage
+    'presence_penalty': 0.1,    # Encourage exploration of diverse concepts
+    'frequency_penalty': 0.15   # Reduce repetition across reasoning steps
 }
 
+# ==============================================================================
+# QUALITY BOUNDARIES (Safety Rails)
+# ==============================================================================
 VALIDATION_BOUNDARIES = {
-    'min_samples_per_cluster': 5,
-    'max_clusters': 15,
-    'coverage_threshold': 0.85,
-    'uncertainty_percentile': 90
+    'minimum_cell_type_coverage': 0.8,     # Must represent at least 80% of cell types
+    'maximum_cluster_imbalance': 3.0,      # No cluster should be >3x larger than smallest
+    'required_sigma_range_coverage': 0.95, # Must span 95% of sigma distribution
+    'boundary_case_minimum': 0.1,          # At least 10% samples from distribution tails
+    'correlation_preservation': 0.85,      # Selected samples must preserve 85% of original correlations
 }
 
 ITERATION_TRIGGERS = {
-    'coverage_below_threshold': 0.80,
-    'cluster_imbalance_ratio': 10.0,
-    'validation_failure': True
+    'coverage_gap_threshold': 0.15,        # Trigger iteration if >15% feature space uncovered
+    'quality_degradation_threshold': 0.2,  # Iterate if quality metrics drop >20%
+    'validation_failure_threshold': 2,     # Maximum validation failures before strategy reset
 }
 
 # LLM CONFIGURATION FUNCTIONS
@@ -515,7 +656,7 @@ Return ONLY the JSON object, nothing else.""")
         self.add_message('assistant', f"Parsed query parameters: {params}")
         return params
 
-    def observe(self, csv_path: str, target_percentage: float = 5.0) -> Dict[str, Any]:
+    def observe(self, csv_path: str, target_percentage: float = 5.0, use_agentic_explore: bool = True) -> Dict[str, Any]:
         """OBSERVE stage with timing domain analysis."""
         self._load_imports()
         print("\nSTAGE 1: OBSERVE (Timing Domain Analysis)")
@@ -613,16 +754,28 @@ Return ONLY the JSON object, nothing else.""")
         target_count = int(observation['total_samples'] * target_percentage / 100)
 
         try:
-            observe_prompt = TIMING_OBSERVE_PROMPT.format(
-                total_samples=observation['total_samples'],
-                target_count=target_count,
-                target_percentage=target_percentage,
-                n_features=observation['n_features'],
-                n_cell_types=len(observation['cell_types']),
-                calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
-                correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
-                sigma_analysis=sigma_analysis
-            )
+            if use_agentic_explore:
+                observe_prompt = AGENTIC_EXPLORE_PROMPT.format(
+                    total_samples=observation['total_samples'],
+                    target_count=target_count,
+                    target_percentage=target_percentage,
+                    n_features=observation['n_features'],
+                    n_cell_types=len(observation['cell_types']),
+                    calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
+                    correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
+                    sigma_analysis=sigma_analysis
+                )
+            else:
+                observe_prompt = TIMING_OBSERVE_PROMPT.format(
+                    total_samples=observation['total_samples'],
+                    target_count=target_count,
+                    target_percentage=target_percentage,
+                    n_features=observation['n_features'],
+                    n_cell_types=len(observation['cell_types']),
+                    calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
+                    correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
+                    sigma_analysis=sigma_analysis
+                )
         except KeyError as e:
             print(f"[ERROR] Missing parameter in OBSERVE prompt: {e}")
             observe_prompt = f"Analyze this timing dataset with {observation['total_samples']} samples for {target_percentage}% selection."
@@ -673,10 +826,16 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
             print(f"  - target_count: {target_count}")
 
         try:
-            think_prompt = TIMING_THINK_PROMPT.format(
-                exploration_findings=exploration_findings,
-                target_count=target_count
-            )
+            if self.agentic_mode:
+                think_prompt = AGENTIC_STRATEGY_PROMPT.format(
+                    exploration_findings=exploration_findings,
+                    target_count=target_count
+                )
+            else:
+                think_prompt = TIMING_THINK_PROMPT.format(
+                    exploration_findings=exploration_findings,
+                    target_count=target_count
+                )
         except KeyError as e:
             print(f"[ERROR] Missing parameter in THINK prompt: {e}")
             # Provide fallback prompt without formatting
@@ -937,8 +1096,7 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         target_count = int(len(self.current_data) * target_percentage / 100)
 
         try:
-            act_prompt = TIMING_ACT_PROMPT.format(
-                exploration_findings=strategy.get('exploration_findings', 'Dataset exploration completed'),
+            act_prompt = AGENTIC_EXECUTE_PROMPT.format(
                 validated_strategy=strategy.get('reasoning', 'Autonomous strategy developed'),
                 target_count=target_count,
                 total_samples=len(self.current_data),
@@ -1051,6 +1209,86 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
 
         return result
 
+    def handle_conversation(self, user_query: str) -> Dict[str, Any]:
+        """Handle conversational questions about results without re-running selection."""
+        self._load_imports()
+
+        # Classify user intent
+        intent, params = self.classify_user_intent(user_query)
+
+        if intent == UserIntent.QUESTION_ABOUT_RESULTS:
+            # Generate response based on conversation history
+            context = "\n".join([msg['content'] for msg in self.conversation_history[-5:]])
+
+            question_prompt = f"""Based on our previous conversation about timing data selection, answer this follow-up question:
+
+User Question: {user_query}
+
+Recent Context:
+            {context}
+
+Provide a clear, technical explanation addressing their specific question about the selection methodology, results, or reasoning. Use plain text only."""
+
+            prompt_template = ChatPromptTemplate.from_messages([
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=question_prompt)
+            ])
+
+            chain = prompt_template | self.llm
+            response = chain.invoke({})
+
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
+
+            self.add_message('assistant', response_text)
+
+            return {
+                'type': 'conversational_response',
+                'intent': intent.value,
+                'response': response_text,
+                'parameters': params
+            }
+
+        elif intent == UserIntent.EXPLAIN_METHODOLOGY:
+            # Explain methodology without running selection
+            methodology_prompt = f"""Explain the timing data selection methodology to address this question:
+
+{user_query}
+
+Provide a technical explanation of the algorithms, approaches, and reasoning behind the methodology. Focus on the specific aspect they're asking about."""
+
+            prompt_template = ChatPromptTemplate.from_messages([
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=methodology_prompt)
+            ])
+
+            chain = prompt_template | self.llm
+            response = chain.invoke({})
+
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
+
+            self.add_message('assistant', response_text)
+
+            return {
+                'type': 'methodology_explanation',
+                'intent': intent.value,
+                'response': response_text,
+                'parameters': params
+            }
+
+        else:
+            # For other intents, indicate that selection should be run
+            return {
+                'type': 'requires_execution',
+                'intent': intent.value,
+                'parameters': params
+            }
+
     def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
         """Main workflow with timing domain expertise."""
         self._load_imports()
@@ -1063,7 +1301,14 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         print("\nParsing timing engineer requirements...")
         params = self.parse_user_query(user_query)
 
-        observation = self.observe(csv_path, params.get('selection_percentage', 5.0))
+        # Check if this is a conversational question first
+        intent, intent_params = self.classify_user_intent(user_query)
+
+        if intent in [UserIntent.QUESTION_ABOUT_RESULTS, UserIntent.EXPLAIN_METHODOLOGY] and len(self.conversation_history) > 0:
+            print("\n[CONVERSATIONAL] Detected follow-up question - providing contextual response")
+            return self.handle_conversation(user_query)
+
+        observation = self.observe(csv_path, params.get('selection_percentage', 5.0), use_agentic_explore=self.agentic_mode)
 
         # Handle null percentage - determine optimal percentage based on actual dataset size
         if params.get('selection_percentage') is None:
@@ -1077,6 +1322,9 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
 
             params['selection_percentage'] = optimal_percentage
             print(f"No percentage specified. Data-driven selection: {optimal_percentage}% for {data_size:,} samples")
+
+        # Update observation with final percentage
+        observation['final_target_percentage'] = params['selection_percentage']
 
         strategy = self.think(observation, params['selection_percentage'])
 
@@ -1208,32 +1456,37 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         intent_patterns = {
             UserIntent.QUESTION_ABOUT_RESULTS: [
                 r'why did you (choose|pick|select)',
-                r'why.*(\\d+)%',
+                r'why.*(\d+)%',
                 r'explain (the|your) (selection|choice|decision)',
                 r'how did you (decide|determine)',
                 r'what.*reasoning.*behind',
                 r'justify.*selection',
                 r'(why|how).*samples',
-                r'rationale.*for'
+                r'rationale.*for',
+                r'why not.*k-?means',
+                r'why not.*clustering',
+                r'what about.*algorithm'
             ],
 
             UserIntent.MODIFY_PARAMETERS: [
-                r'change.*to.*(\\d+)%',
-                r'try.*(\\d+)%.*instead',
-                r'use.*(\\d+).*samples',
-                r'increase.*to.*(\\d+)',
-                r'decrease.*to.*(\\d+)',
+                r'change.*to.*(\d+)%',
+                r'try.*(\d+)%.*instead',
+                r'use.*(\d+).*samples',
+                r'increase.*to.*(\d+)',
+                r'decrease.*to.*(\d+)',
                 r'modify.*percentage',
                 r'adjust.*selection'
             ],
 
             UserIntent.REQUEST_VISUALIZATION: [
                 r'show.*plot',
+                r'show.*visualization',
                 r'visuali[sz]e.*results',
                 r'generate.*dashboard',
                 r'plot.*samples',
                 r'show.*scatter',
-                r'display.*chart'
+                r'display.*chart',
+                r'show.*dashboard'
             ],
 
             UserIntent.EXPLAIN_METHODOLOGY: [
@@ -1241,16 +1494,18 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
                 r'explain.*algorithm',
                 r'what.*method.*using',
                 r'describe.*approach',
-                r'methodology'
+                r'methodology',
+                r'what is.*k-?means',
+                r'difference between.*algorithms'
             ],
 
             UserIntent.EXECUTE_SAMPLING: [
-                r'select.*(\\d+)%',
+                r'select.*(\d+)%',
                 r'run.*sampling',
                 r'perform.*selection',
                 r'execute.*analysis',
                 r'analyze.*dataset',
-                r'sample.*(\\d+)',
+                r'sample.*(\d+)',
                 r'choose.*samples'
             ],
 
@@ -1279,19 +1534,19 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         params = {}
 
         # Extract percentages
-        percentage_matches = re.findall(r'(\\d+)%', user_input)
+        percentage_matches = re.findall(r'(\d+)%', user_input)
         if percentage_matches:
             params['percentage'] = int(percentage_matches[0])
 
         # Extract sample counts
-        sample_matches = re.findall(r'(\\d+)\\s*samples?', user_input, re.IGNORECASE)
+        sample_matches = re.findall(r'(\d+)\s*samples?', user_input, re.IGNORECASE)
         if sample_matches:
             params['sample_count'] = int(sample_matches[0])
 
         # Extract algorithm names
-        algorithm_matches = re.findall(r'(k-means|gmm|clustering)', user_input, re.IGNORECASE)
+        algorithm_matches = re.findall(r'(k-?means|gmm|clustering)', user_input, re.IGNORECASE)
         if algorithm_matches:
-            params['algorithm'] = algorithm_matches[0].lower()
+            params['algorithm'] = algorithm_matches[0].lower().replace('-', '')
 
         return params
 

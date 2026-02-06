@@ -291,31 +291,68 @@ def display_analysis_results(results):
 def handle_user_request(user_input, agent, csv_path):
     """Process user request with intent classification and conversational handling."""
     try:
-        # Classify user intent
-        intent, params = agent.classify_user_intent(user_input)
-        print(f"[INTENT] Classified as: {intent.value}")
-        if params:
-            print(f"[PARAMS] Extracted: {params}")
+        # Use the enhanced conversational handling from the agent
+        conversation_result = agent.handle_conversation(user_input)
 
-        # Handle based on intent
-        if intent.value == "question_about_results":
-            return handle_results_question(user_input, agent)
+        if conversation_result['type'] == 'conversational_response':
+            # Direct answer to question about results
+            print(f"[CONVERSATIONAL] {conversation_result['intent']}")
+            return conversation_result['response'], None
 
-        elif intent.value == "modify_parameters":
-            return handle_parameter_modification(user_input, params, agent, csv_path)
+        elif conversation_result['type'] == 'methodology_explanation':
+            # Methodology explanation
+            print(f"[METHODOLOGY] {conversation_result['intent']}")
+            return conversation_result['response'], None
 
-        elif intent.value == "request_visualization":
-            return handle_visualization_request(agent)
+        elif conversation_result['type'] == 'requires_execution':
+            # Need to run full pipeline
+            intent = conversation_result['intent']
+            params = conversation_result['parameters']
 
-        elif intent.value == "explain_methodology":
-            return handle_methodology_explanation()
+            print(f"[INTENT] Classified as: {intent}")
+            if params:
+                print(f"[PARAMS] Extracted: {params}")
 
-        elif intent.value == "general_help":
-            return handle_general_help()
+            # Handle based on intent
+            if intent == "modify_parameters":
+                return handle_parameter_modification(user_input, params, agent, csv_path)
+
+            elif intent == "request_visualization":
+                return handle_visualization_request(agent)
+
+            elif intent == "general_help":
+                return handle_general_help()
+
+            else:
+                # Execute sampling (default behavior)
+                return handle_execution(user_input, agent, csv_path)
 
         else:
-            # Execute sampling (default behavior)
-            return handle_execution(user_input, agent, csv_path)
+            # Fallback to original logic
+            intent, params = agent.classify_user_intent(user_input)
+            print(f"[INTENT] Classified as: {intent.value}")
+            if params:
+                print(f"[PARAMS] Extracted: {params}")
+
+            # Handle based on intent
+            if intent.value == "question_about_results":
+                return handle_results_question(user_input, agent)
+
+            elif intent.value == "modify_parameters":
+                return handle_parameter_modification(user_input, params, agent, csv_path)
+
+            elif intent.value == "request_visualization":
+                return handle_visualization_request(agent)
+
+            elif intent.value == "explain_methodology":
+                return handle_methodology_explanation()
+
+            elif intent.value == "general_help":
+                return handle_general_help()
+
+            else:
+                # Execute sampling (default behavior)
+                return handle_execution(user_input, agent, csv_path)
 
     except Exception as e:
         error_response = f"""[ERROR] Analysis Error: {str(e)}
