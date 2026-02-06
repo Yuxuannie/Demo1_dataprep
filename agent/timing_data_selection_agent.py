@@ -241,7 +241,7 @@ Return ONLY the JSON object, nothing else.""")
         self.add_message('assistant', f"Parsed query parameters: {params}")
         return params
 
-    def observe(self, csv_path: str) -> Dict[str, Any]:
+    def observe(self, csv_path: str, target_percentage: float = 5.0) -> Dict[str, Any]:
         """OBSERVE stage with timing domain analysis."""
         self._load_imports()
         print("\nSTAGE 1: OBSERVE (Timing Domain Analysis)")
@@ -336,11 +336,14 @@ Return ONLY the JSON object, nothing else.""")
             sigma_analysis = f"Range: {sigma_stats['min']:.3f} to {sigma_stats['max']:.3f}, Mean: {sigma_stats['mean']:.3f}, Std: {sigma_stats['std']:.3f}"
 
         # Generate timing domain observation with ACTUAL DATA
+        target_count = int(observation['total_samples'] * target_percentage / 100)
+
         observe_prompt = TIMING_OBSERVE_PROMPT.format(
             total_samples=observation['total_samples'],
+            target_count=target_count,
+            target_percentage=target_percentage,
             n_features=observation['n_features'],
             n_cell_types=len(observation['cell_types']),
-            n_high_corr=len(timing_correlations),
             calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
             correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
             sigma_analysis=sigma_analysis
@@ -372,13 +375,21 @@ Return ONLY the JSON object, nothing else.""")
 
         target_count = int(observation['total_samples'] * target_percentage / 100)
 
+        # Build exploration findings summary for agentic prompts
+        exploration_findings = f"""Dataset Analysis Results:
+- Total Samples: {observation['total_samples']:,}
+- Target Selection: {target_percentage:.1f}% = {target_count:,} samples
+- Feature Dimensions: {observation['n_features']}
+- Cell Type Diversity: {len(observation['cell_types'])} types
+- High Correlations Found: {len(observation['high_correlations'])} pairs
+- Statistical Complexity: {len(observation.get('timing_statistics', {}))} timing features analyzed
+
+Key Findings: This dataset shows {'high' if len(observation['high_correlations']) > 3 else 'moderate'} correlation complexity
+and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type diversity, suggesting
+{'advanced clustering strategies' if len(observation['high_correlations']) > 3 else 'standard sampling approaches'} may be optimal."""
+
         think_prompt = TIMING_THINK_PROMPT.format(
-            total_samples=observation['total_samples'],
-            target_percentage=target_percentage,
-            target_count=target_count,
-            n_features=observation['n_features'],
-            n_cell_types=len(observation['cell_types']),
-            n_high_corr=len(observation['high_correlations'])
+            exploration_findings=exploration_findings
         )
 
         prompt_template = ChatPromptTemplate.from_messages([
@@ -404,7 +415,9 @@ Return ONLY the JSON object, nothing else.""")
             'variance_threshold': 0.92,
             'n_clusters_range': [8, 10, 12],
             'selection_method': 'uncertainty_based',
-            'timing_focus': True
+            'timing_focus': True,
+            'reasoning': thinking_text,
+            'exploration_findings': exploration_findings
         }
 
         return strategy
@@ -630,17 +643,16 @@ Return ONLY the JSON object, nothing else.""")
         print("\nSTAGE 3: AGENTIC EXECUTION (Autonomous Decision + Action)")
         print("-" * 80)
 
-        observation_summary = f"""Dataset has {len(self.current_data)} samples with {self.current_features.shape[1]} features.
-Target selection: {target_percentage:.1f}% ({int(len(self.current_data) * target_percentage / 100)} samples)
-Strategy reasoning: {strategy.get('reasoning', 'Strategic analysis completed')}"""
-
         # Generate execution plan with autonomous decision-making
+        target_count = int(len(self.current_data) * target_percentage / 100)
+
         act_prompt = TIMING_ACT_PROMPT.format(
-            exploration_findings=observation_summary,
+            exploration_findings=strategy.get('exploration_findings', 'Dataset exploration completed'),
             validated_strategy=strategy.get('reasoning', 'Autonomous strategy developed'),
-            target_count=int(len(self.current_data) * target_percentage / 100),
-            algorithm_choice="Autonomous selection",
-            algorithm_config="Self-optimizing parameters"
+            target_count=target_count,
+            total_samples=len(self.current_data),
+            algorithm_choice="Autonomous GMM clustering",
+            algorithm_config="Adaptive parameters with self-validation"
         )
 
         prompt_template = ChatPromptTemplate.from_messages([
@@ -683,8 +695,7 @@ Strategy reasoning: {strategy.get('reasoning', 'Strategic analysis completed')}"
                 distances = cdist(features_pca, centroids, metric='euclidean')
                 min_distances = np.min(distances, axis=1)
 
-                # Uncertainty-based sampling
-                target_count = int(len(self.current_data) * target_percentage / 100)
+                # Use the target_count calculated earlier (no recalculation needed)
 
                 # Select samples far from centroids (high uncertainty)
                 uncertainty_scores = min_distances
@@ -758,7 +769,7 @@ Strategy reasoning: {strategy.get('reasoning', 'Strategic analysis completed')}"
         print("\nParsing timing engineer requirements...")
         params = self.parse_user_query(user_query)
 
-        observation = self.observe(csv_path)
+        observation = self.observe(csv_path, params.get('selection_percentage', 5.0))
 
         # Handle null percentage - determine optimal percentage based on actual dataset size
         if params.get('selection_percentage') is None:
