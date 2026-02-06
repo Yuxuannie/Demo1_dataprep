@@ -6,6 +6,20 @@ Senior timing engineer expertise for Monte Carlo sample selection
 from typing import Dict, List, Any, Optional
 import json
 import re
+import numpy as np
+import pandas as pd
+
+# Import core ML libraries at module level to avoid import errors
+try:
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    from sklearn.mixture import GaussianMixture
+    from scipy.spatial.distance import cdist
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    print("[WARNING] scikit-learn not available - some features may not work")
 from agentic_timing_prompts import (
     AGENTIC_TIMING_SYSTEM_PROMPT as TIMING_SYSTEM_PROMPT,
     AGENTIC_EXPLORE_PROMPT as TIMING_OBSERVE_PROMPT,
@@ -75,25 +89,18 @@ class TimingDataSelectionAgent:
         if self._imports_loaded:
             return
 
-        global pd, np, PCA, StandardScaler, KMeans, GaussianMixture, cdist
+        # Import LangChain components (these are loaded dynamically)
         global ChatPromptTemplate, HumanMessage, SystemMessage
-
-        import pandas as pd
-        import numpy as np
-        from sklearn.decomposition import PCA
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.cluster import KMeans
-        from sklearn.mixture import GaussianMixture
-        from scipy.spatial.distance import cdist
-
         from langchain.prompts import ChatPromptTemplate
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
         except ImportError:
             from langchain.schema import HumanMessage, SystemMessage
 
-        if self.scaler is None:
+        # Initialize scaler if needed
+        if self.scaler is None and SKLEARN_AVAILABLE:
             self.scaler = StandardScaler()
+
         self._imports_loaded = True
 
     def add_message(self, role: str, content: str):
