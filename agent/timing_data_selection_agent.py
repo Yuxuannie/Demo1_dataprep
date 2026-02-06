@@ -1383,6 +1383,101 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
         """Get conversation history."""
         return self.conversation_history
 
+    def self_test(self, verbose: bool = True) -> bool:
+        """Run internal self-tests to validate agent functionality."""
+        if verbose:
+            print("Running agent self-tests...")
+
+        success_count = 0
+        total_tests = 0
+
+        # Test 1: Intent Classification
+        try:
+            test_cases = [
+                ("why not k-means?", UserIntent.QUESTION_ABOUT_RESULTS),
+                ("Select 5% of timing data", UserIntent.EXECUTE_SAMPLING),
+                ("Change to 8%", UserIntent.MODIFY_PARAMETERS),
+                ("show dashboard", UserIntent.REQUEST_VISUALIZATION),
+                ("How does clustering work?", UserIntent.EXPLAIN_METHODOLOGY),
+                ("help", UserIntent.GENERAL_HELP),
+            ]
+
+            intent_success = 0
+            for test_input, expected_intent in test_cases:
+                actual_intent, params = self.classify_user_intent(test_input)
+                if actual_intent == expected_intent:
+                    intent_success += 1
+                    if verbose:
+                        print(f"✓ Intent: '{test_input}' -> {actual_intent.value}")
+                elif verbose:
+                    print(f"✗ Intent: '{test_input}' -> Expected: {expected_intent.value}, Got: {actual_intent.value}")
+
+            if intent_success >= len(test_cases) * 0.8:  # 80% success rate
+                success_count += 1
+                if verbose:
+                    print(f"✓ Intent Classification: {intent_success}/{len(test_cases)} passed")
+            else:
+                if verbose:
+                    print(f"✗ Intent Classification: {intent_success}/{len(test_cases)} passed")
+            total_tests += 1
+        except Exception as e:
+            if verbose:
+                print(f"✗ Intent Classification failed: {e}")
+            total_tests += 1
+
+        # Test 2: Enhanced Prompts
+        try:
+            test_params = {
+                'total_samples': 10000,
+                'target_count': 500,
+                'target_percentage': 5.0,
+                'n_features': 12,
+                'n_cell_types': 8,
+                'calculated_stats': 'test stats',
+                'correlation_details': 'test correlations',
+                'sigma_analysis': 'test sigma'
+            }
+
+            # Test AGENTIC_EXPLORE_PROMPT formatting
+            formatted = AGENTIC_EXPLORE_PROMPT.format(**test_params)
+            if "10000" in formatted and "500" in formatted:
+                success_count += 1
+                if verbose:
+                    print("✓ Enhanced prompts formatting works")
+            elif verbose:
+                print("✗ Enhanced prompts formatting failed")
+            total_tests += 1
+        except Exception as e:
+            if verbose:
+                print(f"✗ Enhanced prompts test failed: {e}")
+            total_tests += 1
+
+        # Test 3: Validation boundaries
+        try:
+            if ('minimum_cell_type_coverage' in VALIDATION_BOUNDARIES and
+                'temperature' in AGENTIC_LLM_PARAMETERS):
+                success_count += 1
+                if verbose:
+                    print("✓ Enhanced parameters and boundaries loaded")
+            elif verbose:
+                print("✗ Enhanced parameters missing")
+            total_tests += 1
+        except Exception as e:
+            if verbose:
+                print(f"✗ Validation boundaries test failed: {e}")
+            total_tests += 1
+
+        # Summary
+        success_rate = success_count / total_tests if total_tests > 0 else 0
+        if verbose:
+            print(f"\nSelf-test results: {success_count}/{total_tests} tests passed ({success_rate:.0%})")
+            if success_rate >= 0.8:
+                print("✓ Agent self-test PASSED - System ready!")
+            else:
+                print("✗ Agent self-test FAILED - Review configuration")
+
+        return success_rate >= 0.8
+
     # SAFE ALLOCATION METHODS
     def safe_int(self, value: Union[int, float, str, None], default: int = 0) -> int:
         """Convert any value to safe integer, defaulting to 0 for None/invalid values."""

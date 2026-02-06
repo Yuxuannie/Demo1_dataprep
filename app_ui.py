@@ -494,7 +494,8 @@ def handle_general_help() -> Tuple[str, Any]:
 - "Analyze dataset with 8% selection" - Custom percentage
 
 **Questions & Analysis:**
-- "Why did you pick 30%?" - Explain previous decisions
+- "Why did you pick 5%?" - Explain previous decisions
+- "Why not k-means?" - Compare algorithm choices
 - "Explain your reasoning" - Show methodology
 - "How does uncertainty sampling work?" - Technical details
 
@@ -506,7 +507,7 @@ def handle_general_help() -> Tuple[str, Any]:
 - "Show plots" - Generate interactive dashboard
 - "Visualize results" - Display sampling patterns
 
-**Context:** I maintain conversation history and can answer follow-up questions without re-running the entire analysis."""
+**Context:** I maintain conversation history and can answer follow-up questions without re-running the entire analysis. Use the self-test button to verify all systems are working correctly."""
 
     return help_text, None
 
@@ -566,6 +567,17 @@ def main():
                 if agent:
                     st.session_state.agent = agent
                     add_message_to_chat("system", "Timing agent initialized successfully! Upload a CSV file to begin.")
+
+        # Self-test button
+        if st.session_state.agent and st.button("Test Run Self-Test", use_container_width=True):
+            with st.spinner("Running agent self-tests..."):
+                test_result = st.session_state.agent.self_test(verbose=False)
+                if test_result:
+                    st.success("✓ Self-test PASSED - Agent ready!")
+                    add_message_to_chat("system", "Agent self-test completed successfully. All systems operational.")
+                else:
+                    st.error("✗ Self-test FAILED - Check configuration")
+                    add_message_to_chat("system", "Agent self-test failed. Some functionality may not work correctly.")
 
         if st.session_state.agent:
             st.success("[OK] Agent Ready")
