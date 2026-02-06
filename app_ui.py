@@ -89,8 +89,7 @@ st.markdown("""
 def initialize_agent():
     """Initialize timing-aware agent with error handling."""
     try:
-        from agent.timing_data_selection_agent import TimingDataSelectionAgent
-        from agent.timing_llm_config import initialize_timing_llm, test_ollama_connection
+        from agent.timing_data_selection_agent import TimingDataSelectionAgent, initialize_timing_llm, test_ollama_connection
 
         # Test Ollama connection
         if not test_ollama_connection():

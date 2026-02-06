@@ -43,18 +43,269 @@ class UserIntent(Enum):
     EXPLAIN_METHODOLOGY = "explain_methodology"
     REQUEST_VISUALIZATION = "request_visualization"
     GENERAL_HELP = "general_help"
-from agentic_timing_prompts import (
-    AGENTIC_TIMING_SYSTEM_PROMPT as TIMING_SYSTEM_PROMPT,
-    AGENTIC_EXPLORE_PROMPT as TIMING_OBSERVE_PROMPT,
-    AGENTIC_STRATEGY_PROMPT as TIMING_THINK_PROMPT,
-    AGENTIC_EXECUTE_PROMPT as TIMING_ACT_PROMPT,
-    AGENTIC_LLM_PARAMETERS,
-    VALIDATION_BOUNDARIES,
-    ITERATION_TRIGGERS
-)
+# CONSOLIDATED AGENTIC PROMPTS
+TIMING_SYSTEM_PROMPT = """You are an Autonomous Principal ML Data Engineer specializing in semiconductor timing analysis.
 
-# Fallback decide prompt for compatibility
-from TIMING_DECIDE_PROMPT import TIMING_DECIDE_PROMPT
+MISSION:
+Select the most representative subset of timing arcs to train a high-accuracy Machine Learning timing model that generalizes to unseen data.
+
+OPERATING CONSTRAINTS:
+1. MAXIMIZE INFORMATION: Cover the complete feature space (input slew, output load, cell types) and response space (delay, sigma variations)
+2. MINIMIZE COST: User has limited simulation budget - achieve model convergence with minimum samples
+3. ENSURE ROBUSTNESS: Selected samples must enable the ML model to handle corner cases and avoid overfitting
+
+AGENTIC AUTHORITY:
+You have full autonomy to:
+- Develop novel sampling strategies beyond standard methods
+- Combine multiple techniques if data complexity demands it
+- Iterate and self-correct your approach based on statistical evidence
+- Reject conventional wisdom if data patterns suggest otherwise
+
+BOUNDARIES & VALIDATION:
+- You must justify every decision with quantitative reasoning from the provided statistics
+- Your strategy must explicitly address both typical cases AND edge cases
+- You are responsible for validating your own approach before execution
+- If initial analysis reveals flaws, you must autonomously revise your strategy
+
+COMMUNICATION RULES:
+- Use plain text only - no markdown, bullets, emojis, or special symbols
+- Provide quantitative justification for every decision
+- Think like a senior engineer who owns the entire ML pipeline success
+
+SELF-VALIDATION REQUIREMENT:
+After proposing any strategy, you must immediately critique it as if you were a QA lead trying to find flaws. Only proceed if you can defend against all reasonable criticisms."""
+
+TIMING_OBSERVE_PROMPT = """Conduct autonomous exploration of this timing dataset to determine optimal sampling strategy.
+
+DATASET PROFILE:
+- Available Data: {total_samples} timing arcs
+- Budget Constraint: {target_count} samples ({target_percentage:.1f}%)
+- Dimensionality: {n_features} features across {n_cell_types} cell types
+
+CALCULATED STATISTICS:
+{statistical_analysis}
+
+CORRELATION INSIGHTS:
+{correlation_analysis}
+
+AUTONOMOUS EXPLORATION TASKS:
+1. Analyze the correlation matrix to identify which features truly matter for delay prediction
+2. Examine sigma distribution patterns to understand process variation criticality
+3. Assess cell type diversity and determine if uniform vs weighted sampling is optimal
+4. Identify potential clustering patterns and overlapping regions that need boundary sampling
+5. Calculate information entropy and determine if current budget is sufficient for convergence
+
+SELF-GUIDED QUESTIONS:
+- Does this data show clear clustering or is it uniformly distributed?
+- Are there any cell types or feature ranges that are underrepresented?
+- What percentage of total variance can be explained with {target_percentage:.1f}% sampling?
+- Are there obvious correlations that suggest dimensional reduction opportunities?
+
+DELIVERABLE:
+Provide your autonomous analysis and initial strategic direction. Be prepared to defend your conclusions against peer review."""
+
+TIMING_THINK_PROMPT = """Based on your exploration findings, develop your autonomous sampling strategy.
+
+EXPLORATION SUMMARY:
+{exploration_summary}
+
+STRATEGIC THINKING REQUIREMENTS:
+1. INFORMATION DENSITY ANALYSIS: Which regions of the feature space contain the most critical information for ML model training?
+2. RISK ASSESSMENT: What are the failure modes if we miss certain data patterns?
+3. SAMPLING TECHNIQUE SELECTION: Should you use uncertainty sampling, representative sampling, boundary sampling, or a hybrid approach?
+4. VALIDATION STRATEGY: How will you verify that your selected samples provide adequate coverage?
+
+AUTONOMOUS DECISION FRAMEWORK:
+Consider these approaches and select the optimal combination:
+- Grid sampling for systematic coverage
+- Uncertainty sampling for model robustness
+- Boundary sampling for edge case handling
+- Cluster-based sampling for representative coverage
+- Stratified sampling by cell types
+- Active learning principles for iterative refinement
+
+BUSINESS IMPACT CONSIDERATION:
+Your sampling choice directly impacts:
+- ML model accuracy and generalization
+- Simulation cost (time and computational resources)
+- Risk of missing critical timing corners
+- Downstream characterization quality
+
+DELIVERABLE:
+Present your autonomous strategy with quantitative justification. Include contingency plans if initial results don't meet validation criteria."""
+
+TIMING_ACT_PROMPT = """Execute your autonomous sampling strategy with self-validation checkpoints.
+
+FINALIZED STRATEGY:
+{final_strategy}
+
+EXECUTION PARAMETERS:
+- Target samples: {target_count}
+- Clustering algorithm: {algorithm}
+- Number of clusters: {n_clusters}
+- Validation criteria: {validation_requirements}
+
+AUTONOMOUS EXECUTION PROTOCOL:
+1. Implement your chosen sampling technique
+2. Validate selection quality using statistical measures
+3. Check for coverage gaps or bias in the selected subset
+4. Self-assess: Does this selection enable a robust ML model?
+5. If validation fails, autonomously adjust and re-execute
+
+QUALITY CHECKPOINTS:
+- Feature space coverage: Ensure all critical regions are represented
+- Response diversity: Verify delay and sigma distributions are preserved
+- Cell type balance: Confirm no systematic bias in cell type selection
+- Boundary coverage: Check that edge cases and outliers are included
+
+SELF-VALIDATION QUESTIONS:
+- Would you stake your engineering reputation on this sample selection?
+- Can the resulting ML model handle production corner cases?
+- Does this selection optimize the simulation budget vs accuracy tradeoff?
+
+DELIVERABLE:
+Execute sampling and provide validation report with pass/fail assessment. If any checkpoint fails, autonomously iterate until validation succeeds."""
+
+TIMING_DECIDE_PROMPT = """Based on your strategic analysis, make the final technical decisions.
+
+STRATEGY SUMMARY:
+{strategy_summary}
+
+CLUSTERING COMPARISON:
+{clustering_metrics}
+
+DECISION REQUIRED:
+Select the optimal clustering algorithm and parameters based on the analysis:
+
+1. Algorithm Choice: K-means vs GMM
+   - Consider data overlap patterns
+   - Evaluate computational efficiency vs accuracy trade-offs
+
+2. Cluster Count: Optimal number for this dataset
+   - Balance between coverage and computational cost
+   - Consider cell type diversity and feature complexity
+
+3. Final Configuration: Specific parameters
+   - Justify choices with quantitative reasoning
+
+Provide your technical decision with brief justification.
+Use plain text only."""
+
+# LLM PARAMETERS FOR TIMING DOMAIN
+AGENTIC_LLM_PARAMETERS = {
+    'temperature': 0.25,
+    'top_p': 0.90,
+    'top_k': 40,
+    'num_predict': 2500,
+    'repeat_penalty': 1.20
+}
+
+VALIDATION_BOUNDARIES = {
+    'min_samples_per_cluster': 5,
+    'max_clusters': 15,
+    'coverage_threshold': 0.85,
+    'uncertainty_percentile': 90
+}
+
+ITERATION_TRIGGERS = {
+    'coverage_below_threshold': 0.80,
+    'cluster_imbalance_ratio': 10.0,
+    'validation_failure': True
+}
+
+# LLM CONFIGURATION FUNCTIONS
+def initialize_timing_llm():
+    """Initialize LLM with timing domain optimized parameters."""
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Apply timing-specific parameters
+    timing_params = {
+        'LLM_TEMPERATURE': str(AGENTIC_LLM_PARAMETERS.get('temperature', 0.25)),
+        'LLM_TOP_P': str(AGENTIC_LLM_PARAMETERS.get('top_p', 0.90)),
+        'LLM_TOP_K': str(AGENTIC_LLM_PARAMETERS.get('top_k', 40)),
+        'LLM_NUM_PREDICT': str(AGENTIC_LLM_PARAMETERS.get('num_predict', 2500)),
+        'LLM_REPEAT_PENALTY': str(AGENTIC_LLM_PARAMETERS.get('repeat_penalty', 1.20))
+    }
+
+    # Apply parameters only if not already set
+    applied_count = 0
+    for param, value in timing_params.items():
+        if not os.getenv(param):
+            os.environ[param] = value
+            applied_count += 1
+
+    logger.info(f"Timing Domain LLM Configuration:")
+    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}")
+    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'qwen:32b')}")
+    logger.info(f"   Temperature: {os.getenv('LLM_TEMPERATURE')}")
+    if applied_count > 0:
+        logger.info(f"   Applied {applied_count} timing domain parameters")
+
+    try:
+        llm = initialize_ollama_llm()
+        logger.info("Timing domain LLM initialized successfully")
+        return llm
+    except Exception as e:
+        logger.error(f"Timing LLM initialization failed: {e}")
+        raise
+
+def initialize_ollama_llm():
+    """Initialize Ollama LLM with environment parameters."""
+    try:
+        from langchain_ollama import ChatOllama
+    except ImportError:
+        from langchain_community.llms import Ollama as ChatOllama
+
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+    model = os.getenv('OLLAMA_MODEL', 'qwen:32b')
+
+    llm_params = {
+        'model': model,
+        'base_url': base_url,
+        'temperature': float(os.getenv('LLM_TEMPERATURE', '0.25')),
+        'top_p': float(os.getenv('LLM_TOP_P', '0.9')),
+        'num_predict': int(os.getenv('LLM_NUM_PREDICT', '2500')),
+    }
+
+    # Add optional parameters if available
+    if os.getenv('LLM_TOP_K'):
+        llm_params['top_k'] = int(os.getenv('LLM_TOP_K'))
+    if os.getenv('LLM_REPEAT_PENALTY'):
+        llm_params['repeat_penalty'] = float(os.getenv('LLM_REPEAT_PENALTY'))
+
+    return ChatOllama(**llm_params)
+
+def test_ollama_connection():
+    """Test Ollama connection and model availability."""
+    import requests
+    import logging
+
+    logger = logging.getLogger(__name__)
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+
+    try:
+        # Test Ollama server
+        response = requests.get(f"{base_url}/api/tags", timeout=5)
+        if response.status_code == 200:
+            models = response.json().get('models', [])
+            model_names = [model['name'] for model in models]
+            target_model = os.getenv('OLLAMA_MODEL', 'qwen:32b')
+
+            if any(target_model in name for name in model_names):
+                logger.info(f"Ollama connection successful, {target_model} available")
+                return True
+            else:
+                logger.warning(f"Model {target_model} not found. Available: {model_names}")
+                return False
+        else:
+            logger.error(f"Ollama server error: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Ollama connection failed: {e}")
+        return False
 
 AGENTIC_MODE = True
 print("[AGENT] Using Agentic Mode: Autonomous exploration with self-validation")
