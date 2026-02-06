@@ -238,8 +238,8 @@ def initialize_timing_llm():
             applied_count += 1
 
     logger.info(f"Timing Domain LLM Configuration:")
-    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}")
-    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'qwen:32b')}")
+    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')}")
+    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')}")
     logger.info(f"   Temperature: {os.getenv('LLM_TEMPERATURE')}")
     if applied_count > 0:
         logger.info(f"   Applied {applied_count} timing domain parameters")
@@ -259,8 +259,8 @@ def initialize_ollama_llm():
     except ImportError:
         from langchain_community.llms import Ollama as ChatOllama
 
-    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-    model = os.getenv('OLLAMA_MODEL', 'qwen:32b')
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
+    model = os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')
 
     llm_params = {
         'model': model,
@@ -284,7 +284,7 @@ def test_ollama_connection():
     import logging
 
     logger = logging.getLogger(__name__)
-    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
 
     try:
         # Test Ollama server
@@ -292,7 +292,7 @@ def test_ollama_connection():
         if response.status_code == 200:
             models = response.json().get('models', [])
             model_names = [model['name'] for model in models]
-            target_model = os.getenv('OLLAMA_MODEL', 'qwen:32b')
+            target_model = os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')
 
             if any(target_model in name for name in model_names):
                 logger.info(f"Ollama connection successful, {target_model} available")

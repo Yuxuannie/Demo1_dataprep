@@ -611,9 +611,9 @@ def main():
             <br>3. Ask me to analyze your data!
             <br><br>
             <strong>Example requests:</strong>
-            <br>• "Select 5% of timing data for library characterization"
-            <br>• "Focus on high-variability timing paths"
-            <br>• "Use K-means clustering with 8 clusters"
+            <br>- "Select 5% of timing data for library characterization"
+            <br>- "Focus on high-variability timing paths"
+            <br>- "Use K-means clustering with 8 clusters"
             </div>
             """, unsafe_allow_html=True)
 
@@ -693,17 +693,17 @@ def main():
                 suggestions = """Here are some modifications you could try:
 
 **Different Percentages:**
-• "Change to 3% for faster characterization"
-• "Increase to 8% for better coverage"
+- "Change to 3% for faster characterization"
+- "Increase to 8% for better coverage"
 
 **Algorithm Changes:**
-• "Try K-means instead of GMM"
-• "Use more clusters for finer granularity"
+- "Try K-means instead of GMM"
+- "Use more clusters for finer granularity"
 
 **Focus Areas:**
-• "Focus on high-sigma timing paths"
-• "Prioritize boundary cases"
-• "Select critical timing corners only"
+- "Focus on high-sigma timing paths"
+- "Prioritize boundary cases"
+- "Select critical timing corners only"
 
 What would you like to modify?"""
 

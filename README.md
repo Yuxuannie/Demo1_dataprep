@@ -7,7 +7,7 @@ Agentic AI system for intelligent Monte Carlo timing characterization sample sel
 1. **Install & Run**
    ```bash
    pip install -r requirements.txt
-   ollama serve && ollama pull qwen:32b
+   ollama serve && ollama pull qwen2.5_coder_32B
    python run_agent.py
    ```
 
@@ -70,7 +70,7 @@ demo1_dataprep/
 
 Set environment variables for customization:
 ```bash
-OLLAMA_MODEL=qwen:32b           # LLM model
+OLLAMA_MODEL=qwen2.5_coder_32B   # LLM model
 LLM_TEMPERATURE=0.25            # Reasoning consistency
 LLM_NUM_PREDICT=2500            # Extended context
 ```
@@ -80,7 +80,7 @@ LLM_NUM_PREDICT=2500            # Extended context
 **Ollama Issues**: `ollama serve && ollama list`
 **Import Errors**: `pip install -r requirements.txt`
 **Memory Issues**: Sample large datasets before processing
-**Slow Response**: Use smaller model `ollama pull qwen:7b`
+**Slow Response**: Use smaller model `ollama pull qwen2.5:7b`
 
 ## Development
 
