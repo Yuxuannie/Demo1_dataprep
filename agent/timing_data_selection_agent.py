@@ -816,6 +816,8 @@ Return ONLY the JSON object, nothing else.""")
             sigma_analysis = f"Range: {sigma_stats['min']:.3f} to {sigma_stats['max']:.3f}, Mean: {sigma_stats['mean']:.3f}, Std: {sigma_stats['std']:.3f}"
 
         # Generate timing domain observation with ACTUAL DATA
+        if target_percentage is None:
+            raise ValueError("target_percentage cannot be None at this stage")
         target_count = int(observation['total_samples'] * target_percentage / 100)
 
         try:
@@ -869,6 +871,8 @@ Return ONLY the JSON object, nothing else.""")
         print("\nSTAGE 2: THINK (Strategic Timing Analysis)")
         print("-" * 80)
 
+        if target_percentage is None:
+            raise ValueError("target_percentage cannot be None at this stage")
         target_count = int(observation['total_samples'] * target_percentage / 100)
 
         # Build exploration findings summary for agentic prompts
@@ -1158,6 +1162,8 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         print("-" * 80)
 
         # Generate execution plan with autonomous decision-making
+        if target_percentage is None:
+            raise ValueError("target_percentage cannot be None at this stage")
         target_count = int(len(self.current_data) * target_percentage / 100)
 
         try:
@@ -1227,7 +1233,10 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
                 else:
                     print(f"\n[ITERATION {attempt + 1}] Validation failed, adjusting strategy...")
                     # Adjust target count or approach for next iteration
-                    target_count = int(target_count * 1.1)  # Slightly increase sample count
+                    if target_count is not None:
+                        target_count = int(target_count * 1.1)  # Slightly increase sample count
+                    else:
+                        raise ValueError("target_count cannot be None during iteration")
 
             except Exception as e:
                 print(f"[ERROR] Execution attempt {attempt + 1} failed: {e}")
@@ -1373,11 +1382,11 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
             print("\n[CONVERSATIONAL] Detected follow-up question - providing contextual response")
             return self.handle_conversation(user_query)
 
-        observation = self.observe(csv_path, params.get('selection_percentage', 5.0), use_agentic_explore=self.agentic_mode)
-
-        # Handle null percentage - determine optimal percentage based on actual dataset size
+        # Handle null percentage first - determine optimal percentage based on actual dataset size
         if params.get('selection_percentage') is None:
-            data_size = len(self.current_data)
+            # Need to load data first to determine size
+            temp_data = pd.read_csv(csv_path)
+            data_size = len(temp_data)
             if data_size > 50000:
                 optimal_percentage = 3.0  # Large datasets need less percentage
             elif data_size > 20000:
@@ -1387,6 +1396,9 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
 
             params['selection_percentage'] = optimal_percentage
             print(f"No percentage specified. Data-driven selection: {optimal_percentage}% for {data_size:,} samples")
+
+        # Now call observe with valid percentage
+        observation = self.observe(csv_path, params['selection_percentage'], use_agentic_explore=self.agentic_mode)
 
         # Update observation with final percentage
         observation['final_target_percentage'] = params['selection_percentage']
