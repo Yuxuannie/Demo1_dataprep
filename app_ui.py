@@ -132,42 +132,106 @@ def display_reasoning_log(reasoning_log):
 
 
 def display_visual_dashboard(results, csv_path):
-    """Display visual validation dashboard."""
-    st.markdown("### Dashboard Visual Validation Dashboard")
+    """Display visual validation dashboard using agent's built-in visualization."""
+    st.markdown("### Interactive Validation Dashboard")
 
     try:
-        from plot_utils import TimingVisualizationDashboard
-
-        # Create dashboard
-        dashboard = TimingVisualizationDashboard()
-
-        # Load CSV data for dashboard
+        # Load CSV data
         df = pd.read_csv(csv_path)
 
-        # Generate plots using correct method name and data structure
-        fig, plot_metadata = dashboard.generate_dashboard_plots(
-            df=df,
-            selected_indices=results.get('result', {}).get('selected_indices', []),
-            clusters=results.get('decision', {}).get('clustering', {}).get('labels', []),
-            centroids=results.get('decision', {}).get('clustering', {}).get('centroids', []),
-            pca_components=results.get('decision', {}).get('pca', {}).get('n_components', 2)
-        )
+        # Get the agent instance from session state to access visualization methods
+        if 'agent' not in st.session_state or not st.session_state.agent:
+            st.error("Agent not available for visualization. Please initialize the agent first.")
+            return
 
-        if fig:
-            st.pyplot(fig)
+        agent = st.session_state.agent
 
-            # Add interpretation
+        # Extract data from results
+        selected_indices = results.get('result', {}).get('selected_indices', [])
+        decision = results.get('decision', {})
+        clustering = decision.get('clustering', {})
+        clusters = clustering.get('labels', np.array([]))
+        centroids = clustering.get('centroids', np.array([]))
+        pca_data = decision.get('pca', {})
+        pca_components = decision.get('features_pca', None)
+
+        if len(selected_indices) == 0:
+            st.warning("No sample selection data available for visualization.")
+            return
+
+        # Generate interactive dashboard using agent's built-in method
+        with st.spinner("Generating interactive dashboard..."):
+            dashboard_result = agent.generate_interactive_dashboard(
+                df=df,
+                selected_indices=selected_indices,
+                clusters=clusters,
+                centroids=centroids,
+                pca_components=pca_components,
+                export_html=False  # Don't export HTML in Streamlit
+            )
+
+        # Display the plotly figure if available
+        if 'plotly_figure' in dashboard_result and dashboard_result['plotly_figure']:
+            st.plotly_chart(dashboard_result['plotly_figure'], use_container_width=True)
+
+            # Add interpretation based on the analysis
             st.markdown("""
-            **Analysis Dashboard Interpretation:**
-            - **Left**: PCA cluster visualization showing selected boundary samples (red dots)
-            - **Center**: Feature correlation heatmap justifying PCA dimensionality reduction
-            - **Right**: Distribution overlay proving selected samples cover critical tail regions
+            **Dashboard Interpretation:**
+            - **Sample Overview**: Selected samples (red diamonds) vs unselected (background dots)
+            - **Cluster Analysis**: Color-coded clusters showing data structure and centroids (black X)
+            - **Selection Statistics**: Sample distribution across clusters for validation
+            - **Data Distribution**: Histogram overlay comparing selected vs all data
+
+            **Timing Engineering Insights:**
+            - High-uncertainty samples prioritized for robust ML training
+            - Boundary cases and process corners adequately represented
+            - Cell type diversity maintained across selected samples
             """)
+
+            # Display summary statistics
+            dashboard_data = dashboard_result.get('dashboard_data', {})
+            summary = dashboard_data.get('summary', {})
+
+            if summary:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Samples", f"{summary.get('total_samples', 0):,}")
+                with col2:
+                    st.metric("Selected", f"{summary.get('selected_count', 0):,}")
+                with col3:
+                    st.metric("Selection Rate", f"{summary.get('selection_percentage', 0):.1f}%")
+                with col4:
+                    st.metric("Clusters", summary.get('num_clusters', 0))
+
+        elif 'summary_text' in dashboard_result:
+            # Fallback to text summary if Plotly not available
+            st.text(dashboard_result['summary_text'])
+
         else:
-            st.warning("[WARNING] Could not generate visualization dashboard")
+            st.warning("Dashboard generation completed but no visualization data returned.")
+
+        # Option to export HTML if user wants
+        if st.button("Export Interactive HTML", help="Export dashboard as standalone HTML file"):
+            with st.spinner("Exporting interactive HTML..."):
+                export_result = agent.generate_interactive_dashboard(
+                    df=df,
+                    selected_indices=selected_indices,
+                    clusters=clusters,
+                    centroids=centroids,
+                    pca_components=pca_components,
+                    export_html=True
+                )
+
+                html_path = export_result.get('html_export_path')
+                if html_path:
+                    st.success(f"Interactive dashboard exported to: {html_path}")
+                    st.info("Open this HTML file in your browser for full interactivity (zoom, pan, hover details)")
+                else:
+                    st.error("Failed to export HTML dashboard")
 
     except Exception as e:
-        st.error(f"[ERROR] Visualization error: {e}")
+        st.error(f"Visualization Error: {str(e)}")
+        st.info("Tip: Ensure you have run a sampling analysis first to generate visualization data")
 
 
 def add_message_to_chat(role, content, message_type="text", metadata=None):
@@ -318,7 +382,15 @@ def handle_user_request(user_input, agent, csv_path):
                 return handle_parameter_modification(user_input, params, agent, csv_path)
 
             elif intent == "request_visualization":
-                return handle_visualization_request(agent)
+                response, viz_data = handle_visualization_request(agent)
+                if viz_data and 'visualization_requested' in viz_data:
+                    # Trigger visualization display
+                    return response, {
+                        'type': 'visual_dashboard',
+                        'results': viz_data['results'],
+                        'csv_path': viz_data.get('csv_path')
+                    }
+                return response, None
 
             elif intent == "general_help":
                 return handle_general_help()
@@ -446,14 +518,16 @@ def handle_parameter_modification(user_input: str, params: Dict[str, Any], agent
 
 def handle_visualization_request(agent) -> Tuple[str, Any]:
     """Handle requests for visualization without re-execution."""
-    print("[VISUALIZATION] Generating plots from previous results...")
+    print("[VISUALIZATION] Generating interactive dashboard from previous results...")
 
     if not st.session_state.current_results:
-        return "No results to visualize. Please run sampling first.", None
+        return "No results to visualize. Please run sampling analysis first.", None
 
-    return "Generating interactive visualization dashboard...", {
+    # Return visualization data that will trigger the dashboard display
+    return "Generating interactive timing analysis dashboard with cluster visualization, sample distribution analysis, and selection validation...", {
         'visualization_requested': True,
-        'results': st.session_state.current_results
+        'results': st.session_state.current_results,
+        'csv_path': st.session_state.csv_path
     }
 
 
@@ -684,8 +758,14 @@ def main():
 
         # Add agent response
         if results:
-            add_message_to_chat("agent", response, "analysis_results", {"results": results})
-            st.session_state.current_results = results
+            if results.get('type') == 'visual_dashboard':
+                add_message_to_chat("agent", response, "visual_dashboard", {
+                    "results": results['results'],
+                    "csv_path": results['csv_path']
+                })
+            else:
+                add_message_to_chat("agent", response, "analysis_results", {"results": results})
+                st.session_state.current_results = results
         else:
             add_message_to_chat("agent", response)
 
