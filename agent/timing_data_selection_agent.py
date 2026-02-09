@@ -25,15 +25,9 @@ except ImportError:
     SKLEARN_AVAILABLE = False
     print("[WARNING] scikit-learn not available - some features may not work")
 
-# Import visualization libraries
-try:
-    import plotly.graph_objects as go
-    import plotly.express as px
-    from plotly.subplots import make_subplots
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-    print("[WARNING] Plotly not available - will use fallback visualization")
+# Using self-contained HTML visualization - no external dependencies
+PLOTLY_AVAILABLE = False  # Force use of self-contained HTML
+print("[INFO] Using self-contained HTML visualization (zero dependencies)")
 
 
 # Intent Classification System
@@ -934,32 +928,27 @@ Return ONLY the JSON object, nothing else.""")
         self.current_data = pd.read_csv(csv_path)
         print(f"Analyzing {len(self.current_data)} timing arc samples...")
 
-        # DATA LOADING VERIFICATION GATE
-        expected_columns = [
-            'cell_arc_pt', 'nominal_delay', 'lib_sigma_delay_late', 'nominal_tran',
-            'lib_sigma_tran_late', 'sigma_by_nominal', 'early_sigma_by_late_sigma',
-            'stdev_by_late_sigma', 'mnshift_by_late_sigma', 'skew_by_late_sigma',
-            'cross_signal_enc', 'tran_nominal_by_delay_nominal', 'tran_late_by_delay_late',
-            'mc_err_delay_late', 'slew_point', 'load_point', 'delay', 'sigma_delay',
-            'transition', 'sigma_transition', 'mc_err_transition'
-        ]
-
+        # DATA LOADING VERIFICATION GATE - DYNAMIC DISCOVERY
         actual_columns = self.current_data.columns.tolist()
-        missing_columns = [col for col in expected_columns if col not in actual_columns]
-        unexpected_columns = [col for col in actual_columns if col not in expected_columns]
+        numeric_columns = self.current_data.select_dtypes(include=['float64', 'int64', 'float32', 'int32']).columns.tolist()
+        identifier_columns = self.current_data.select_dtypes(include=['object']).columns.tolist()
 
         print(f"\n{'=' * 50}")
-        print(f"DATA VERIFICATION GATE")
+        print(f"DATA DISCOVERY GATE")
         print(f"{'=' * 50}")
-        print(f"Expected: 21 columns | Found: {len(actual_columns)} columns")
-        if missing_columns:
-            print(f"Missing: {missing_columns}")
-        if unexpected_columns:
-            print(f"Unexpected: {unexpected_columns}")
-        if len(actual_columns) == 21 and not missing_columns:
-            print("STATUS: [OK] All 21 expected columns present")
+        print(f"Total Columns: {len(actual_columns)}")
+        print(f"Numeric Features: {len(numeric_columns)}")
+        print(f"Identifier Columns: {len(identifier_columns)}")
+
+        # Check for key identifier column
+        if 'cell_arc_pt' in actual_columns:
+            print("STATUS: [OK] Key identifier 'cell_arc_pt' found")
+        elif any('arc_pt' in col for col in actual_columns):
+            print("STATUS: [OK] Arc identifier column found")
         else:
-            print("STATUS: [WARNING] Column mismatch detected - proceeding with available data")
+            print("STATUS: [WARNING] No arc identifier column detected")
+
+        print(f"STATUS: [OK] Using dynamic column discovery - no hardcoded expectations")
         print(f"{'=' * 50}")
 
         # MANDATORY first step: print all column names and preserve all data
@@ -1023,7 +1012,7 @@ Return ONLY the JSON object, nothing else.""")
 
         observation['high_correlations'] = timing_correlations
 
-        # Cell type analysis - parse from actual column names
+        # Cell type and table position analysis - parse from actual column names
         print(f"[SCHEMA] Available columns: {list(self.current_data.columns)}")
         try:
             if 'cell_arc_pt' in self.current_data.columns:
@@ -1032,6 +1021,66 @@ Return ONLY the JSON object, nothing else.""")
                 observation['cell_types'] = cell_names.value_counts().to_dict()
                 print(f"[SCHEMA] Parsed {len(observation['cell_types'])} cell types from cell_arc_pt column")
                 print(f"[SCHEMA] Sample cell names: {list(observation['cell_types'].keys())[:5]}")
+
+                # CRITICAL FIX: Parse table positions using rsplit to avoid false matches
+                print(f"\n{'=' * 50}")
+                print(f"TABLE POSITION PARSING")
+                print(f"{'=' * 50}")
+
+                def parse_table_position(cell_arc_pt_value):
+                    """Extract table row and column using rsplit to avoid false matches with cell names."""
+                    parts = cell_arc_pt_value.rsplit('_', 2)  # Split from right, max 2 splits
+                    if len(parts) >= 3:
+                        table_row = int(parts[-2])  # Second to last = row
+                        table_col = int(parts[-1])  # Last = col
+                        return table_row, table_col
+                    else:
+                        return None, None
+
+                # Apply correct parsing
+                table_positions = self.current_data['cell_arc_pt'].apply(parse_table_position)
+                self.current_data['table_row'] = [pos[0] for pos in table_positions]
+                self.current_data['table_col'] = [pos[1] for pos in table_positions]
+
+                # Remove any invalid positions
+                valid_positions = (self.current_data['table_row'].notna()) & (self.current_data['table_col'].notna())
+                if valid_positions.sum() > 0:
+                    # Validation
+                    min_row = self.current_data.loc[valid_positions, 'table_row'].min()
+                    max_row = self.current_data.loc[valid_positions, 'table_row'].max()
+                    min_col = self.current_data.loc[valid_positions, 'table_col'].min()
+                    max_col = self.current_data.loc[valid_positions, 'table_col'].max()
+
+                    print(f"Table row range: {min_row} to {max_row}")
+                    print(f"Table col range: {min_col} to {max_col}")
+                    print(f"Valid table positions: {valid_positions.sum()} / {len(self.current_data)}")
+
+                    # Verify with examples
+                    sample_indices = self.current_data.index[:3]
+                    for idx in sample_indices:
+                        cell_pt = self.current_data.loc[idx, 'cell_arc_pt']
+                        row = self.current_data.loc[idx, 'table_row']
+                        col = self.current_data.loc[idx, 'table_col']
+                        print(f"Example: '{cell_pt[-10:]}' → row={row}, col={col}")
+
+                    # VALIDATION GATE: table indices must be within expected range
+                    if max_row > 8 or max_col > 8:
+                        print(f"ERROR: Table position parsing failed - max row/col {max_row}/{max_col} > 8")
+                        print("This indicates the parsing regex is matching wrong digit groups!")
+                    else:
+                        print("✓ Table position parsing validated: all values in expected range")
+
+                    # Add boundary case identification
+                    table_size = max(max_row, max_col)
+                    self.current_data['is_boundary'] = (
+                        ((self.current_data['table_row'] == 1) | (self.current_data['table_row'] == table_size)) &
+                        ((self.current_data['table_col'] == 1) | (self.current_data['table_col'] == table_size))
+                    )
+                    boundary_count = self.current_data['is_boundary'].sum()
+                    print(f"Boundary cases identified: {boundary_count} ({boundary_count/len(self.current_data)*100:.1f}%)")
+
+                print(f"{'=' * 50}")
+
             elif 'arc_pt' in self.current_data.columns:
                 # Fallback to arc_pt if available
                 cell_types = self.current_data['arc_pt'].str.extract(r'^([A-Z0-9]+)')[0]
@@ -1043,7 +1092,7 @@ Return ONLY the JSON object, nothing else.""")
                 print(f"[SCHEMA] Available columns for reference: {list(self.current_data.columns)}")
         except Exception as e:
             observation['cell_types'] = {'unknown': len(self.current_data)}
-            print(f"[SCHEMA] Error parsing cell types: {e}")
+            print(f"[SCHEMA] Error parsing cell types/table positions: {e}")
             print(f"[SCHEMA] Available columns: {list(self.current_data.columns)}")
 
         # CRITICAL FIX: Calculate actual statistics for prompt injection
@@ -2394,36 +2443,191 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
                 return None
 
     def _fallback_visualization(self, df: pd.DataFrame, selected_indices: List[int], clusters: np.ndarray) -> Dict[str, Any]:
-        """Fallback visualization when Plotly is not available."""
+        """Generate comprehensive self-contained HTML dashboard with zero dependencies."""
+        import tempfile
+        import time
 
-        print("[INFO] Using basic fallback visualization")
+        print("[INFO] Generating self-contained HTML dashboard")
 
-        # Create simple text-based summary
-        total_samples = len(df)
-        selected_count = len(selected_indices)
-        selection_percentage = selected_count / total_samples * 100
-        num_clusters = len(np.unique(clusters))
+        # Compute comprehensive statistics
+        selected = df.iloc[selected_indices]
+        total = len(df)
+        n_selected = len(selected)
+        n_clusters = len(set(clusters))
+        selection_pct = n_selected / total * 100
 
-        summary_text = f"""
-        TIMING DATA SELECTION SUMMARY
-        =============================
-        Total samples: {total_samples:,}
-        Selected: {selected_count:,} ({selection_percentage:.1f}%)
-        Clusters: {num_clusters}
+        # Cluster analysis
+        import numpy as np
+        cluster_counts = np.bincount(clusters)
+        cluster_selected = np.bincount(np.array(clusters)[selected_indices], minlength=n_clusters)
 
-        Selection distributed across {num_clusters} timing clusters
-        using uncertainty-based sampling for critical corner coverage.
-        """
+        # Feature analysis
+        numeric_cols = df.select_dtypes(include='number').columns.tolist()[:15]  # Top 15 features
+        feature_rows = ""
+        for col in numeric_cols:
+            full_mean = df[col].mean()
+            sel_mean = selected[col].mean()
+            full_std = df[col].std()
+            sel_std = selected[col].std()
+            diff_pct = ((sel_mean - full_mean) / abs(full_mean) * 100) if full_mean != 0 else 0
+            color = "#10B981" if abs(diff_pct) < 10 else "#F59E0B" if abs(diff_pct) < 25 else "#EF4444"
+            feature_rows += f'''
+            <tr>
+                <td style="font-family:monospace;font-size:11px">{col[:25]}</td>
+                <td>{full_mean:.4f}</td>
+                <td>{sel_mean:.4f}</td>
+                <td>{full_std:.4f}</td>
+                <td>{sel_std:.4f}</td>
+                <td style="color:{color};font-weight:bold">{diff_pct:+.1f}%</td>
+            </tr>'''
+
+        # Cell type analysis if available
+        cell_info = ""
+        if 'cell_arc_pt' in df.columns:
+            unique_cells = df['cell_arc_pt'].str.split('#').str[0].nunique()
+            selected_cells = selected['cell_arc_pt'].str.split('#').str[0].nunique()
+            cell_info = f'''
+            <div class="metric"><div class="metric-value">{unique_cells}</div><div class="metric-label">Unique Cells</div></div>
+            <div class="metric"><div class="metric-value">{selected_cells}</div><div class="metric-label">Cells in Selection</div></div>
+            '''
+
+        # Cluster distribution table
+        cluster_rows = ""
+        for i in range(n_clusters):
+            pct_total = cluster_counts[i] / total * 100 if total > 0 else 0
+            pct_selected = cluster_selected[i] / n_selected * 100 if n_selected > 0 else 0
+            rate = cluster_selected[i] / cluster_counts[i] * 100 if cluster_counts[i] > 0 else 0
+            cluster_rows += f'''
+            <tr>
+                <td>Cluster {i}</td>
+                <td>{cluster_counts[i]:,} ({pct_total:.1f}%)</td>
+                <td>{cluster_selected[i]:,} ({pct_selected:.1f}%)</td>
+                <td>{rate:.1f}%</td>
+            </tr>'''
+
+        # CSS bar chart
+        max_count = max(cluster_counts) if len(cluster_counts) > 0 else 1
+        bar_items = ""
+        for i in range(n_clusters):
+            height_pct = cluster_counts[i] / max_count * 100
+            sel_height_pct = cluster_selected[i] / max_count * 100
+            bar_items += f'''
+            <div style="display:flex;flex-direction:column;align-items:center;flex:1;gap:4px">
+                <div style="width:100%;display:flex;align-items:flex-end;height:200px;gap:2px;justify-content:center">
+                    <div style="width:40%;background:#1E3A5F;height:{height_pct}%;border-radius:4px 4px 0 0;min-height:2px"
+                         title="Total: {cluster_counts[i]}"></div>
+                    <div style="width:40%;background:#06B6D4;height:{sel_height_pct}%;border-radius:4px 4px 0 0;min-height:2px"
+                         title="Selected: {cluster_selected[i]}"></div>
+                </div>
+                <span style="font-size:11px;color:#94A3B8">C{i}</span>
+            </div>'''
+
+        # Generate HTML dashboard
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIQC Sampling Validation Dashboard</title>
+<style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{ font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0B1120; color: #E2E8F0; padding: 24px; }}
+    .container {{ max-width: 1280px; margin: 0 auto; }}
+    h1 {{ color: #06B6D4; font-size: 1.8em; margin-bottom: 4px; }}
+    .subtitle {{ color: #64748B; font-size: 0.9em; margin-bottom: 24px; }}
+    .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }}
+    .metric {{ background: #1E293B; border-radius: 10px; padding: 20px; border-left: 4px solid #0891B2; }}
+    .metric-value {{ font-size: 1.8em; color: #06B6D4; font-weight: 700; }}
+    .metric-label {{ color: #94A3B8; font-size: 0.8em; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }}
+    .card {{ background: #1E293B; border-radius: 10px; padding: 20px; }}
+    .card h2 {{ color: #06B6D4; font-size: 1.1em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #334155; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.85em; }}
+    th {{ text-align: left; padding: 8px 10px; color: #06B6D4; border-bottom: 2px solid #334155; font-weight: 600; }}
+    td {{ padding: 7px 10px; border-bottom: 1px solid #1E3A5F; }}
+    tr:hover td {{ background: #0F1D32; }}
+    .legend {{ display: flex; gap: 16px; margin-bottom: 8px; font-size: 0.8em; }}
+    .legend-item {{ display: flex; align-items: center; gap: 4px; }}
+    .legend-box {{ width: 12px; height: 12px; border-radius: 2px; }}
+    .footer {{ text-align: center; color: #475569; font-size: 0.75em; margin-top: 32px; padding-top: 16px; border-top: 1px solid #1E293B; }}
+    @media (max-width: 800px) {{ .grid {{ grid-template-columns: 1fr; }} }}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>AIQC Sampling Validation Dashboard</h1>
+    <p class="subtitle">AI-Driven Representative Sampling for Timing Library Characterization</p>
+
+    <div class="metrics">
+        <div class="metric"><div class="metric-value">{total:,}</div><div class="metric-label">Total Arcs</div></div>
+        <div class="metric"><div class="metric-value">{n_selected:,}</div><div class="metric-label">Selected</div></div>
+        <div class="metric"><div class="metric-value">{selection_pct:.1f}%</div><div class="metric-label">Selection Rate</div></div>
+        <div class="metric"><div class="metric-value">{n_clusters}</div><div class="metric-label">Clusters</div></div>
+        {cell_info}
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>Cluster Distribution</h2>
+            <div class="legend">
+                <div class="legend-item"><div class="legend-box" style="background:#1E3A5F"></div> Total</div>
+                <div class="legend-item"><div class="legend-box" style="background:#06B6D4"></div> Selected</div>
+            </div>
+            <div style="display:flex;gap:2px;align-items:flex-end;height:220px;margin-bottom:16px">
+                {bar_items}
+            </div>
+            <table>
+                <tr><th>Cluster</th><th>Total</th><th>Selected</th><th>Rate</th></tr>
+                {cluster_rows}
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Feature Distribution: Selected vs Full Dataset</h2>
+            <table>
+                <tr><th>Feature</th><th>Full μ</th><th>Sel μ</th><th>Full σ</th><th>Sel σ</th><th>Δ%</th></tr>
+                {feature_rows}
+            </table>
+            <p style="font-size:0.75em;color:#64748B;margin-top:8px">
+                Colors: <span style="color:#10B981">Green (&lt;10%)</span>,
+                <span style="color:#F59E0B">Yellow (&lt;25%)</span>,
+                <span style="color:#EF4444">Red (≥25%)</span> difference from full dataset
+            </p>
+        </div>
+    </div>
+
+    <div class="footer">Generated by AIQC Agent — Self-Contained HTML Dashboard (Zero Dependencies)</div>
+</div>
+</body>
+</html>'''
+
+        # Export HTML dashboard
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        html_filename = f"aiqc_dashboard_{n_selected}samples_{timestamp}.html"
+        html_path = os.path.join(tempfile.gettempdir(), html_filename)
+
+        try:
+            with open(html_path, 'w') as f:
+                f.write(html)
+            print(f"✓ Self-contained dashboard exported: {html_path} ({len(html)} bytes)")
+        except Exception as e:
+            print(f"Failed to export HTML dashboard: {e}")
+            html_path = None
 
         return {
-            'summary_text': summary_text,
+            'summary_text': f"Selected {n_selected:,} samples ({selection_pct:.1f}%) from {total:,} across {n_clusters} clusters",
             'dashboard_data': {
-                'total_samples': total_samples,
-                'selected_count': selected_count,
-                'selection_percentage': selection_percentage,
-                'num_clusters': num_clusters
+                'total_samples': total,
+                'selected_count': n_selected,
+                'selection_percentage': selection_pct,
+                'num_clusters': n_clusters
             },
             'plotly_figure': None,
-            'html_export_path': None,
-            'interactive_features': {'text_summary': True}
+            'html_export_path': html_path,
+            'interactive_features': {
+                'self_contained': True,
+                'cluster_visualization': True,
+                'feature_comparison': True,
+                'zero_dependencies': True
+            }
         }
