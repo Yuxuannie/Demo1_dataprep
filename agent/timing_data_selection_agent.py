@@ -118,6 +118,43 @@ dataset['is_edge'] = (
 
 IMPORTANT: The table position IS the slew/load information. There are no separate 'slew' and 'load' columns. Row index maps to input slew, column index maps to output load. Use table positions for boundary case analysis, not assumed slew/load columns.
 
+## Expected Feature Set: 21-Column CSV Format
+
+The CSV contains the following timing characterization features:
+
+**IDENTIFIER:**
+- `cell_arc_pt`: Compound identifier (cell#arc#direction_row_col)
+
+**CORE TIMING METRICS:**
+- `nominal_delay`: Nominal delay value under typical conditions
+- `delay`: Actual characterized delay value
+- `lib_sigma_delay_late`: Library sigma for late delay
+- `sigma_delay`: Delay sigma/variation
+- `nominal_tran`: Nominal transition/slew time
+- `transition`: Actual characterized transition time
+- `lib_sigma_tran_late`: Library sigma for late transition
+- `sigma_transition`: Transition sigma/variation
+- `mc_err_delay_late`: Monte Carlo error for late delay
+- `mc_err_transition`: Monte Carlo error for transition
+
+**PROCESS VARIATION METRICS:**
+- `sigma_by_nominal`: Sigma normalized by nominal value (key risk metric)
+- `early_sigma_by_late_sigma`: Early-to-late sigma ratio
+- `stdev_by_late_sigma`: Standard deviation normalized by late sigma
+- `mnshift_by_late_sigma`: Mean shift normalized by late sigma
+- `skew_by_late_sigma`: Skewness normalized by late sigma
+
+**CHARACTERIZATION CONDITIONS:**
+- `slew_point`: Input slew point index (maps to table_row)
+- `load_point`: Output load point index (maps to table_col)
+
+**CORRELATION METRICS:**
+- `cross_signal_enc`: Cross-signal encoding/correlation
+- `tran_nominal_by_delay_nominal`: Transition-to-delay ratio (nominal)
+- `tran_late_by_delay_late`: Transition-to-delay ratio (late corner)
+
+These 21 columns provide comprehensive timing analysis covering nominal values, process variation, characterization conditions, and cross-metric correlations for ASIC library characterization and ML model training.
+
 ## Tool Output Integrity
 
 CRITICAL: When you write code to analyze data, the code MUST actually execute and return real results.
@@ -890,32 +927,66 @@ Return ONLY the JSON object, nothing else.""")
     def observe(self, csv_path: str, target_percentage: float = 5.0, use_agentic_explore: bool = True) -> Dict[str, Any]:
         """OBSERVE stage with timing domain analysis."""
         self._load_imports()
-        print("\nSTAGE 1: OBSERVE (Timing Domain Analysis)")
-        print("-" * 80)
+        print("\n" + "=" * 100)
+        print("[1] STAGE 1: OBSERVE - Timing Domain Analysis & Feature Discovery")
+        print("=" * 100)
 
         self.current_data = pd.read_csv(csv_path)
         print(f"Analyzing {len(self.current_data)} timing arc samples...")
 
-        # Timing-focused feature selection
-        timing_features = [
-            'nominal_delay', 'lib_sigma_delay_late',
-            'nominal_tran', 'lib_sigma_tran_late',
-            'sigma_by_nominal', 'early_sigma_by_late_sigma',
-            'stdev_by_late_sigma', 'mnshift_by_late_sigma',
-            'skew_by_late_sigma', 'cross_signal_enc',
-            'tran_nominal_by_delay_nominal', 'tran_late_by_delay_late',
-            'mc_err_delay_late'
+        # DATA LOADING VERIFICATION GATE
+        expected_columns = [
+            'cell_arc_pt', 'nominal_delay', 'lib_sigma_delay_late', 'nominal_tran',
+            'lib_sigma_tran_late', 'sigma_by_nominal', 'early_sigma_by_late_sigma',
+            'stdev_by_late_sigma', 'mnshift_by_late_sigma', 'skew_by_late_sigma',
+            'cross_signal_enc', 'tran_nominal_by_delay_nominal', 'tran_late_by_delay_late',
+            'mc_err_delay_late', 'slew_point', 'load_point', 'delay', 'sigma_delay',
+            'transition', 'sigma_transition', 'mc_err_transition'
         ]
 
+        actual_columns = self.current_data.columns.tolist()
+        missing_columns = [col for col in expected_columns if col not in actual_columns]
+        unexpected_columns = [col for col in actual_columns if col not in expected_columns]
+
+        print(f"\n{'=' * 50}")
+        print(f"DATA VERIFICATION GATE")
+        print(f"{'=' * 50}")
+        print(f"Expected: 21 columns | Found: {len(actual_columns)} columns")
+        if missing_columns:
+            print(f"Missing: {missing_columns}")
+        if unexpected_columns:
+            print(f"Unexpected: {unexpected_columns}")
+        if len(actual_columns) == 21 and not missing_columns:
+            print("STATUS: [OK] All 21 expected columns present")
+        else:
+            print("STATUS: [WARNING] Column mismatch detected - proceeding with available data")
+        print(f"{'=' * 50}")
+
+        # MANDATORY first step: print all column names and preserve all data
+        print(f"[SCHEMA] All CSV columns: {self.current_data.columns.tolist()}")
+        print(f"[SCHEMA] Data shape: {self.current_data.shape}")
+        print(f"[SCHEMA] Data types: {self.current_data.dtypes.to_dict()}")
+
+        # Use ALL available columns except identifier columns for analysis
         available_cols = self.current_data.columns.tolist()
-        feature_cols = [col for col in timing_features if col in available_cols]
 
-        if len(feature_cols) < 3:
-            feature_cols = [col for col in available_cols
-                          if col != 'arc_pt' and self.current_data[col].dtype in ['float64', 'int64']]
+        # Exclude only pure identifier columns, keep all feature data
+        exclude_cols = ['cell_arc_pt', 'arc_pt'] if any('arc_pt' in col for col in available_cols) else []
+        feature_cols = [col for col in available_cols if col not in exclude_cols]
 
-        self.current_features = self.current_data[feature_cols].values
-        print(f"Selected {len(feature_cols)} timing-critical features")
+        print(f"[SCHEMA] Using {len(feature_cols)} feature columns: {feature_cols}")
+
+        # Store ALL features for analysis - no filtering
+        if feature_cols:
+            self.current_features = self.current_data[feature_cols].values
+        else:
+            # Fallback to all numeric columns if somehow no features found
+            numeric_cols = self.current_data.select_dtypes(include=['float64', 'int64', 'float32', 'int32']).columns.tolist()
+            self.current_features = self.current_data[numeric_cols].values
+            feature_cols = numeric_cols
+            print(f"[SCHEMA] Fallback to numeric columns: {feature_cols}")
+
+        print(f"[SCHEMA] Feature matrix shape: {self.current_features.shape}")
 
         observation = {
             'total_samples': len(self.current_data),
@@ -1047,8 +1118,9 @@ Return ONLY the JSON object, nothing else.""")
     def think(self, observation: Dict[str, Any], target_percentage: float) -> Dict[str, Any]:
         """THINK stage with timing strategy reasoning."""
         self._load_imports()
-        print("\nSTAGE 2: THINK (Strategic Timing Analysis)")
-        print("-" * 80)
+        print("\n" + "=" * 100)
+        print("[2] STAGE 2: THINK - Strategic Timing Analysis & Sampling Strategy")
+        print("=" * 100)
 
         if target_percentage is None:
             raise ValueError("target_percentage cannot be None at this stage")
@@ -1122,8 +1194,9 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
     def decide(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
         """DECIDE stage with timing algorithm selection."""
         self._load_imports()
-        print("\nSTAGE 3: DECIDE (Timing Algorithm Selection)")
-        print("-" * 80)
+        print("\n" + "=" * 100)
+        print("[3] STAGE 3: DECIDE - Algorithm Selection & Parameter Optimization")
+        print("=" * 100)
 
         # PCA for timing feature compression
         print("Applying PCA for timing feature optimization...")
@@ -1234,8 +1307,9 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
     def act(self, decision: Dict[str, Any], strategy: Dict[str, Any]) -> Dict[str, Any]:
         """ACT stage with timing-optimized uncertainty sampling."""
         self._load_imports()
-        print("\nSTAGE 4: ACT (Timing-Optimized Sample Selection)")
-        print("-" * 80)
+        print("\n" + "=" * 100)
+        print("[4] STAGE 4: ACT - Timing-Optimized Sample Selection & Validation")
+        print("=" * 100)
 
         target_count = strategy['target_count']
         labels = decision['clustering']['labels']
@@ -1337,8 +1411,9 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
     def act_agentic(self, strategy: Dict[str, Any], target_percentage: float) -> Dict[str, Any]:
         """Agentic ACT stage with autonomous decision-making and self-validation."""
         self._load_imports()
-        print("\nSTAGE 3: AGENTIC EXECUTION (Autonomous Decision + Action)")
-        print("-" * 80)
+        print("\n" + "=" * 100)
+        print("[A] STAGE 3: AGENTIC EXECUTION - Autonomous Decision & Action")
+        print("=" * 100)
 
         # Generate execution plan with autonomous decision-making
         if target_percentage is None:
@@ -2295,12 +2370,28 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
 
         except Exception as e:
             print(f"Failed to export HTML dashboard: {str(e)}")
-            print(f"Error details: {type(e).__name__}")
-            # Return None to indicate failure rather than crashing
-            return None
+            print(f"Error type: {type(e).__name__}")
 
-        print(f"Interactive dashboard exported: {html_path}")
-        return html_path
+            # Try to create a fallback basic HTML export
+            try:
+                fallback_path = os.path.join(tempfile.gettempdir(), f"timing_dashboard_fallback_{timestamp}.html")
+                with open(fallback_path, 'w') as f:
+                    f.write(f"""
+                    <html><head><title>Timing Dashboard</title></head>
+                    <body>
+                        <h1>Timing Data Selection Dashboard</h1>
+                        <p>Selected: {selected_count:,} samples ({selection_percentage:.1f}%)</p>
+                        <p>Total: {total_samples:,} samples</p>
+                        <p>Clusters: {num_clusters}</p>
+                        <p>Note: Interactive visualization failed, fallback text report generated</p>
+                    </body></html>
+                    """)
+                print(f"Fallback HTML report created: {fallback_path}")
+                return fallback_path
+            except Exception as fallback_e:
+                print(f"Fallback HTML creation also failed: {fallback_e}")
+                # Return None to indicate complete failure
+                return None
 
     def _fallback_visualization(self, df: pd.DataFrame, selected_indices: List[int], clusters: np.ndarray) -> Dict[str, Any]:
         """Fallback visualization when Plotly is not available."""
