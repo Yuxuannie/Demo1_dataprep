@@ -647,10 +647,10 @@ def main():
             with st.spinner("Running agent self-tests..."):
                 test_result = st.session_state.agent.self_test(verbose=False)
                 if test_result:
-                    st.success("✓ Self-test PASSED - Agent ready!")
+                    st.success("Self-test PASSED - Agent ready!")
                     add_message_to_chat("system", "Agent self-test completed successfully. All systems operational.")
                 else:
-                    st.error("✗ Self-test FAILED - Check configuration")
+                    st.error("Self-test FAILED - Check configuration")
                     add_message_to_chat("system", "Agent self-test failed. Some functionality may not work correctly.")
 
         if st.session_state.agent:

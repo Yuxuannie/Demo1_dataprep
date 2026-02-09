@@ -49,7 +49,7 @@ TIMING_SYSTEM_PROMPT = """You are a Senior Semiconductor Timing Engineer with de
 SEMICONDUCTOR DOMAIN EXPERTISE:
 Apply this timing domain knowledge to ALL decisions:
 
-- SIGMA VALUES: High sigma (>1.0) = high process sensitivity. These arcs MUST be overrepresented in training data — missing them creates silicon risk.
+- SIGMA VALUES: High sigma (>1.0) = high process sensitivity. These arcs MUST be overrepresented in training data - missing them creates silicon risk.
 - TIMING ARCS: Different arc types (setup/hold/delay/transition) have different sensitivity profiles. Wide delay ranges indicate multiple operating regimes.
 - PVT SPACE: Samples must cover Process/Voltage/Temperature corners, not cluster around typical conditions. Corner cases drive signoff decisions.
 - CELL DIVERSITY: Different topologies (buffers vs flip-flops vs muxes) behave differently. Training data dominated by one type won't generalize.
@@ -66,16 +66,16 @@ JUSTIFICATION RULE:
 Every justification must include at least one number derived from your current analysis. Replace all instances of 'this ensures X' with 'this achieves X because [metric]=[value]'. If you cannot quantify a justification, explicitly label it as an assumption.
 
 TOOL OUTPUT DISPLAY RULE:
-After every tool call, first print the key numerical results (scores, cluster sizes, explained variance, etc.), THEN interpret. Never say 'the clustering revealed natural groupings' — say 'GMM(n=5) returned: silhouette=0.42, BIC=-45230, cluster_sizes=[8234, 12441, 6302, 9182, 1478]. Cluster 5 (1478 pts, 3.9%) contains 67% of arcs with sigma > 2.0 — this is the high-sensitivity tail that needs dedicated representation.'
+After every tool call, first print the key numerical results (scores, cluster sizes, explained variance, etc.), THEN interpret. Never say 'the clustering revealed natural groupings' - say 'GMM(n=5) returned: silhouette=0.42, BIC=-45230, cluster_sizes=[8234, 12441, 6302, 9182, 1478]. Cluster 5 (1478 pts, 3.9%) contains 67% of arcs with sigma > 2.0 - this is the high-sensitivity tail that needs dedicated representation.'
 
 If a tool result surprises you (differs from what you expected), explicitly state: 'Expected [X] but got [Y]. This changes my approach because [reason].'
 
 OUTPUT FORMAT REQUIREMENT:
 ALL responses must follow this two-level structure:
 
-### SUMMARY (MANDATORY — show first, 10-15 lines max)
-- Dataset: [size, features, key stats — 2 lines]
-- Method: [chosen approach + parameters — 1 line]
+### SUMMARY (MANDATORY - show first, 10-15 lines max)
+- Dataset: [size, features, key stats - 2 lines]
+- Method: [chosen approach + parameters - 1 line]
 - Allocation: [exact sample counts and percentages]
 - Key reasons: [2-3 data-driven reasons with numbers]
 - Confidence: [High/Medium/Low] + [why]
@@ -90,7 +90,7 @@ You must complete minimum 2 iterations before finalizing any clustering decision
 # ==============================================================================
 # STEP 1: AUTONOMOUS DATA EXPLORATION
 # ==============================================================================
-AGENTIC_EXPLORE_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
+AGENTIC_EXPLORE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: {total_samples} timing arcs, {n_features} features, {n_cell_types} cell types
 - [Complete this based on the data below]
 - Method: [To be determined after analysis]
@@ -141,7 +141,7 @@ REMEMBER: Every statement must reference actual numbers from the analysis above.
 # ==============================================================================
 # STEP 2: STRATEGY SYNTHESIS WITH VALIDATION
 # ==============================================================================
-AGENTIC_STRATEGY_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
+AGENTIC_STRATEGY_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: [Copy key stats from exploration]
 - Method: [Selected approach with specific parameters]
 - Allocation: {target_count} samples distributed as [specific breakdown with numbers]
@@ -188,7 +188,7 @@ No circular reasoning allowed. No 'this ensures comprehensive coverage' without 
 # ==============================================================================
 # STEP 3: EXECUTION WITH CONTINUOUS VALIDATION
 # ==============================================================================
-AGENTIC_EXECUTE_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
+AGENTIC_EXECUTE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: {total_samples} arcs, targeting {target_count} samples
 - Method: [Final algorithm with parameters after iterations]
 - Allocation: [Exact breakdown after execution]
@@ -256,7 +256,7 @@ Would you stake your reputation on this selection for silicon signoff? Yes/No an
 # ==============================================================================
 # LEGACY COMPATIBILITY PROMPTS (For Standard Mode)
 # ==============================================================================
-TIMING_OBSERVE_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
+TIMING_OBSERVE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: {total_samples} timing arcs, {n_features} features, {n_cell_types} cell types
 - Method: [To be determined after timing domain analysis]
 - Allocation: Target {target_count} samples ({target_percentage:.1f}%)
@@ -291,7 +291,7 @@ STRATEGIC DIRECTION:
 Based on the numerical analysis above (not generic timing knowledge), recommend clustering vs boundary sampling approach.
 [Decision]: [Specific approach] because [quantitative evidence from above]"""
 
-TIMING_THINK_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
+TIMING_THINK_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: [Copy key stats from exploration]
 - Method: [Selected approach with parameters]
 - Allocation: [Specific sample distribution]
@@ -322,7 +322,7 @@ TIMING_THINK_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
 
 Each allocation must be justified with numbers, not statements like 'ensures coverage'."""
 
-TIMING_ACT_PROMPT = """### SUMMARY (MANDATORY — show first, 10-15 lines max)
+TIMING_ACT_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: [Key stats]
 - Method: [Final algorithm after iterations]
 - Allocation: [Exact sample counts]
@@ -1485,21 +1485,21 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
                 if actual_intent == expected_intent:
                     intent_success += 1
                     if verbose:
-                        print(f"✓ Intent: '{test_input}' -> {actual_intent.value}")
+                        print(f"[PASS] Intent: '{test_input}' -> {actual_intent.value}")
                 elif verbose:
-                    print(f"✗ Intent: '{test_input}' -> Expected: {expected_intent.value}, Got: {actual_intent.value}")
+                    print(f"[FAIL] Intent: '{test_input}' -> Expected: {expected_intent.value}, Got: {actual_intent.value}")
 
             if intent_success >= len(test_cases) * 0.8:  # 80% success rate
                 success_count += 1
                 if verbose:
-                    print(f"✓ Intent Classification: {intent_success}/{len(test_cases)} passed")
+                    print(f"[PASS] Intent Classification: {intent_success}/{len(test_cases)} passed")
             else:
                 if verbose:
-                    print(f"✗ Intent Classification: {intent_success}/{len(test_cases)} passed")
+                    print(f"[FAIL] Intent Classification: {intent_success}/{len(test_cases)} passed")
             total_tests += 1
         except Exception as e:
             if verbose:
-                print(f"✗ Intent Classification failed: {e}")
+                print(f"[FAIL] Intent Classification failed: {e}")
             total_tests += 1
 
         # Test 2: Enhanced Prompts
@@ -1520,13 +1520,13 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
             if "10000" in formatted and "500" in formatted:
                 success_count += 1
                 if verbose:
-                    print("✓ Enhanced prompts formatting works")
+                    print("[PASS] Enhanced prompts formatting works")
             elif verbose:
-                print("✗ Enhanced prompts formatting failed")
+                print("[FAIL] Enhanced prompts formatting failed")
             total_tests += 1
         except Exception as e:
             if verbose:
-                print(f"✗ Enhanced prompts test failed: {e}")
+                print(f"[FAIL] Enhanced prompts test failed: {e}")
             total_tests += 1
 
         # Test 3: Validation boundaries
@@ -1535,13 +1535,13 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
                 'temperature' in AGENTIC_LLM_PARAMETERS):
                 success_count += 1
                 if verbose:
-                    print("✓ Enhanced parameters and boundaries loaded")
+                    print("[PASS] Enhanced parameters and boundaries loaded")
             elif verbose:
-                print("✗ Enhanced parameters missing")
+                print("[FAIL] Enhanced parameters missing")
             total_tests += 1
         except Exception as e:
             if verbose:
-                print(f"✗ Validation boundaries test failed: {e}")
+                print(f"[FAIL] Validation boundaries test failed: {e}")
             total_tests += 1
 
         # Summary
@@ -1549,9 +1549,9 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
         if verbose:
             print(f"\nSelf-test results: {success_count}/{total_tests} tests passed ({success_rate:.0%})")
             if success_rate >= 0.8:
-                print("✓ Agent self-test PASSED - System ready!")
+                print("[PASS] Agent self-test PASSED - System ready!")
             else:
-                print("✗ Agent self-test FAILED - Review configuration")
+                print("[FAIL] Agent self-test FAILED - Review configuration")
 
         return success_rate >= 0.8
 
