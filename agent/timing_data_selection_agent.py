@@ -1362,99 +1362,577 @@ print(f"Tournament data prepared: {X_scaled.shape[0]} samples, {X_scaled.shape[1
 
         self.execute_python_code(tournament_code)
 
-        # Step 2: Run the tournament for KMeans and GMM
+        # Step 2: Run comprehensive algorithm tournament
         tournament_main_code = """
-# ALGORITHM TOURNAMENT - REAL PERFORMANCE COMPARISON
+# COMPREHENSIVE ALGORITHM TOURNAMENT - EXPLORE BEST MODEL FOR DATASET
+
+from sklearn.cluster import (
+    KMeans, GaussianMixture, AgglomerativeClustering,
+    DBSCAN, SpectralClustering, Birch, MeanShift
+)
+from sklearn.metrics import silhouette_score, calinski_harabasz_index, davies_bouldin_score
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
 
 tournament_results = []
 
-print("\\n--- ALGORITHM TOURNAMENT STARTING ---")
+print("\\n=== COMPREHENSIVE ALGORITHM TOURNAMENT ===")
+print(f"Testing {len(X_scaled)} samples with {X_scaled.shape[1]} features")
+print("Exploring optimal clustering algorithm for observed dataset...")
 
-# Test K-Means with different k values
-print("\\nTesting K-Means...")
-for k in range(2, 11):  # k=2 to k=10
+# 1. K-MEANS FAMILY - Fast, spherical clusters
+print("\\n1. K-MEANS FAMILY")
+print("-" * 30)
+for k in range(2, 9):  # Test k=2 to k=8
     try:
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+        # Standard K-Means
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10, algorithm='lloyd')
         labels = kmeans.fit_predict(X_scaled)
-        silhouette_avg = silhouette_score(X_scaled, labels)
+
+        # Multiple evaluation metrics
+        sil_score = silhouette_score(X_scaled, labels)
+        ch_score = calinski_harabasz_index(X_scaled, labels)
+        db_score = davies_bouldin_score(X_scaled, labels)  # Lower is better
 
         tournament_results.append({
-            'algorithm': 'KMeans',
+            'algorithm': 'K-Means',
+            'variant': 'lloyd',
             'k': k,
-            'silhouette_score': silhouette_avg,
+            'silhouette_score': sil_score,
+            'calinski_harabasz_score': ch_score,
+            'davies_bouldin_score': db_score,
+            'composite_score': sil_score + (ch_score / 1000) - (db_score / 10),  # Composite metric
             'labels': labels,
             'model': kmeans
         })
 
-        print(f"K-Means k={k}: Silhouette Score = {silhouette_avg:.4f}")
-    except Exception as e:
-        print(f"K-Means k={k}: ERROR - {e}")
+        print(f"  K-Means k={k}: Sil={sil_score:.4f}, CH={ch_score:.1f}, DB={db_score:.3f}")
 
-# Test Gaussian Mixture Models with different components
-print("\\nTesting Gaussian Mixture Models...")
-for n in range(2, 11):  # n=2 to n=10
-    try:
-        gmm = GaussianMixture(n_components=n, random_state=42)
-        labels = gmm.fit_predict(X_scaled)
-        silhouette_avg = silhouette_score(X_scaled, labels)
-        bic_score = gmm.bic(X_scaled)
+        # K-Means++ initialization variant
+        kmeans_pp = KMeans(n_clusters=k, random_state=42, n_init=10, init='k-means++')
+        labels_pp = kmeans_pp.fit_predict(X_scaled)
+        sil_pp = silhouette_score(X_scaled, labels_pp)
 
         tournament_results.append({
-            'algorithm': 'GMM',
-            'k': n,
-            'silhouette_score': silhouette_avg,
-            'bic_score': bic_score,
-            'labels': labels,
-            'model': gmm
+            'algorithm': 'K-Means',
+            'variant': 'k-means++',
+            'k': k,
+            'silhouette_score': sil_pp,
+            'calinski_harabasz_score': calinski_harabasz_index(X_scaled, labels_pp),
+            'davies_bouldin_score': davies_bouldin_score(X_scaled, labels_pp),
+            'composite_score': sil_pp + (calinski_harabasz_index(X_scaled, labels_pp) / 1000) - (davies_bouldin_score(X_scaled, labels_pp) / 10),
+            'labels': labels_pp,
+            'model': kmeans_pp
         })
 
-        print(f"GMM n={n}: Silhouette Score = {silhouette_avg:.4f}, BIC = {bic_score:.2f}")
     except Exception as e:
-        print(f"GMM n={n}: ERROR - {e}")
+        print(f"  K-Means k={k}: ERROR - {e}")
 
-print("\\n--- TOURNAMENT COMPLETE ---")
+# 2. GAUSSIAN MIXTURE MODELS - Overlapping, probabilistic clusters
+print("\\n2. GAUSSIAN MIXTURE MODELS")
+print("-" * 30)
+for n in range(2, 9):  # Test n=2 to n=8 components
+    for cov_type in ['full', 'tied', 'diag', 'spherical']:
+        try:
+            gmm = GaussianMixture(n_components=n, covariance_type=cov_type, random_state=42, max_iter=100)
+            labels = gmm.fit_predict(X_scaled)
+
+            # Skip if convergence failed or only one cluster found
+            if len(np.unique(labels)) < 2:
+                continue
+
+            sil_score = silhouette_score(X_scaled, labels)
+            bic_score = gmm.bic(X_scaled)
+            aic_score = gmm.aic(X_scaled)
+
+            # Composite score (lower BIC/AIC is better, higher silhouette is better)
+            composite = sil_score - (bic_score / 10000) - (aic_score / 10000)
+
+            tournament_results.append({
+                'algorithm': 'GMM',
+                'variant': cov_type,
+                'k': n,
+                'silhouette_score': sil_score,
+                'bic_score': bic_score,
+                'aic_score': aic_score,
+                'composite_score': composite,
+                'labels': labels,
+                'model': gmm
+            })
+
+            print(f"  GMM n={n} ({cov_type}): Sil={sil_score:.4f}, BIC={bic_score:.1f}")
+        except Exception as e:
+            print(f"  GMM n={n} ({cov_type}): ERROR - {e}")
+
+# 3. HIERARCHICAL CLUSTERING - Tree-based, deterministic
+print("\\n3. HIERARCHICAL CLUSTERING")
+print("-" * 30)
+for k in range(2, 8):  # Test k=2 to k=7
+    for linkage in ['ward', 'complete', 'average', 'single']:
+        try:
+            if linkage == 'ward':
+                # Ward only works with euclidean distance
+                agg = AgglomerativeClustering(n_clusters=k, linkage=linkage, metric='euclidean')
+            else:
+                agg = AgglomerativeClustering(n_clusters=k, linkage=linkage, metric='cosine')
+
+            labels = agg.fit_predict(X_scaled)
+
+            sil_score = silhouette_score(X_scaled, labels)
+            ch_score = calinski_harabasz_index(X_scaled, labels)
+            db_score = davies_bouldin_score(X_scaled, labels)
+
+            composite = sil_score + (ch_score / 1000) - (db_score / 10)
+
+            tournament_results.append({
+                'algorithm': 'Hierarchical',
+                'variant': linkage,
+                'k': k,
+                'silhouette_score': sil_score,
+                'calinski_harabasz_score': ch_score,
+                'davies_bouldin_score': db_score,
+                'composite_score': composite,
+                'labels': labels,
+                'model': agg
+            })
+
+            print(f"  Hierarchical k={k} ({linkage}): Sil={sil_score:.4f}, CH={ch_score:.1f}")
+        except Exception as e:
+            print(f"  Hierarchical k={k} ({linkage}): ERROR - {e}")
+
+# 4. DBSCAN - Density-based, finds arbitrary shapes
+print("\\n4. DBSCAN - DENSITY-BASED")
+print("-" * 30)
+
+# Adaptive epsilon estimation using k-distance graph
+if len(X_scaled) <= 10000:  # Only for manageable dataset sizes
+    try:
+        # Find optimal eps using knee method
+        neighbors = NearestNeighbors(n_neighbors=min(20, len(X_scaled)//2))
+        neighbors_fit = neighbors.fit(X_scaled)
+        distances, indices = neighbors_fit.kneighbors(X_scaled)
+        distances = np.sort(distances, axis=0)
+        distances = distances[:, 1]  # Remove self-distance
+
+        # Test multiple eps values around the estimated optimal
+        eps_candidates = np.percentile(distances, [10, 25, 50, 75, 90])
+
+        for eps in eps_candidates:
+            for min_samples in [3, 5, 10, 15]:
+                try:
+                    dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric='euclidean')
+                    labels = dbscan.fit_predict(X_scaled)
+
+                    # Count clusters (excluding noise points labeled as -1)
+                    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+                    n_noise = list(labels).count(-1)
+
+                    # Skip if too few clusters or too much noise
+                    if n_clusters < 2 or n_noise > len(X_scaled) * 0.5:
+                        continue
+
+                    sil_score = silhouette_score(X_scaled, labels)
+
+                    # Penalty for noise points
+                    noise_penalty = n_noise / len(X_scaled)
+                    composite = sil_score - noise_penalty
+
+                    tournament_results.append({
+                        'algorithm': 'DBSCAN',
+                        'variant': f'eps={eps:.3f}_min={min_samples}',
+                        'k': n_clusters,
+                        'silhouette_score': sil_score,
+                        'noise_points': n_noise,
+                        'noise_ratio': noise_penalty,
+                        'composite_score': composite,
+                        'eps': eps,
+                        'min_samples': min_samples,
+                        'labels': labels,
+                        'model': dbscan
+                    })
+
+                    print(f"  DBSCAN eps={eps:.3f} min={min_samples}: {n_clusters} clusters, {n_noise} noise, Sil={sil_score:.4f}")
+                except Exception as e:
+                    continue
+    except Exception as e:
+        print(f"  DBSCAN: Skipping due to error - {e}")
+
+# 5. SPECTRAL CLUSTERING - Non-convex shapes, graph-based
+print("\\n5. SPECTRAL CLUSTERING")
+print("-" * 30)
+if len(X_scaled) <= 5000:  # Spectral can be memory intensive
+    for k in range(2, 7):  # Test k=2 to k=6
+        for affinity in ['rbf', 'nearest_neighbors']:
+            try:
+                spectral = SpectralClustering(
+                    n_clusters=k,
+                    random_state=42,
+                    affinity=affinity,
+                    n_neighbors=min(10, len(X_scaled)//10) if affinity == 'nearest_neighbors' else 10
+                )
+                labels = spectral.fit_predict(X_scaled)
+
+                sil_score = silhouette_score(X_scaled, labels)
+                ch_score = calinski_harabasz_index(X_scaled, labels)
+
+                composite = sil_score + (ch_score / 1000)
+
+                tournament_results.append({
+                    'algorithm': 'Spectral',
+                    'variant': affinity,
+                    'k': k,
+                    'silhouette_score': sil_score,
+                    'calinski_harabasz_score': ch_score,
+                    'composite_score': composite,
+                    'labels': labels,
+                    'model': spectral
+                })
+
+                print(f"  Spectral k={k} ({affinity}): Sil={sil_score:.4f}")
+            except Exception as e:
+                print(f"  Spectral k={k} ({affinity}): ERROR - {e}")
+
+# 6. BIRCH - Memory efficient, good for large datasets
+print("\\n6. BIRCH CLUSTERING")
+print("-" * 30)
+for k in range(2, 8):
+    for threshold in [0.1, 0.3, 0.5, 1.0]:
+        try:
+            birch = Birch(n_clusters=k, threshold=threshold, branching_factor=50)
+            labels = birch.fit_predict(X_scaled)
+
+            sil_score = silhouette_score(X_scaled, labels)
+            ch_score = calinski_harabasz_index(X_scaled, labels)
+
+            composite = sil_score + (ch_score / 1000)
+
+            tournament_results.append({
+                'algorithm': 'BIRCH',
+                'variant': f'thresh={threshold}',
+                'k': k,
+                'silhouette_score': sil_score,
+                'calinski_harabasz_score': ch_score,
+                'composite_score': composite,
+                'threshold': threshold,
+                'labels': labels,
+                'model': birch
+            })
+
+            print(f"  BIRCH k={k} thresh={threshold}: Sil={sil_score:.4f}")
+        except Exception as e:
+            print(f"  BIRCH k={k} thresh={threshold}: ERROR - {e}")
+
+# 7. MEAN SHIFT - Automatic cluster detection
+print("\\n7. MEAN SHIFT - AUTO CLUSTER DETECTION")
+print("-" * 30)
+if len(X_scaled) <= 2000:  # Mean Shift can be slow
+    try:
+        from sklearn.cluster import estimate_bandwidth, MeanShift
+
+        # Estimate bandwidth automatically
+        bandwidth = estimate_bandwidth(X_scaled, quantile=0.2, n_samples=min(500, len(X_scaled)))
+
+        if bandwidth > 0:
+            for bw_factor in [0.5, 1.0, 1.5, 2.0]:
+                try:
+                    meanshift = MeanShift(bandwidth=bandwidth * bw_factor, bin_seeding=True)
+                    labels = meanshift.fit_predict(X_scaled)
+
+                    n_clusters = len(np.unique(labels))
+
+                    if n_clusters >= 2:
+                        sil_score = silhouette_score(X_scaled, labels)
+
+                        tournament_results.append({
+                            'algorithm': 'MeanShift',
+                            'variant': f'bw_factor={bw_factor}',
+                            'k': n_clusters,
+                            'silhouette_score': sil_score,
+                            'composite_score': sil_score,
+                            'bandwidth': bandwidth * bw_factor,
+                            'labels': labels,
+                            'model': meanshift
+                        })
+
+                        print(f"  MeanShift bw={bandwidth*bw_factor:.3f}: {n_clusters} clusters, Sil={sil_score:.4f}")
+                except Exception as e:
+                    continue
+    except Exception as e:
+        print(f"  MeanShift: Skipping due to error - {e}")
+
+print("\\n=== COMPREHENSIVE TOURNAMENT COMPLETE ===")
+print(f"Total algorithm configurations tested: {len(tournament_results)}")
 """
 
         tournament_output = self.execute_python_code(tournament_main_code)
         print("Tournament Execution Output:")
         print(tournament_output)
 
-        # Step 3: Analyze results and select winner
+        # Step 3: Intelligent analysis with adaptive tool selection
         analysis_code = """
-# TOURNAMENT ANALYSIS - SELECT WINNER BASED ON REAL METRICS
+# INTELLIGENT TOURNAMENT ANALYSIS - ADAPTIVE TOOL SELECTION
 
 results_df = pd.DataFrame(tournament_results)
 
 if len(results_df) > 0:
-    print("\\n=== TOURNAMENT RESULTS TABLE ===")
-    print("Algorithm | k/n | Silhouette | BIC (GMM only)")
-    print("-" * 50)
+    print("\\n=== INTELLIGENT ANALYSIS PHASE ===")
 
-    for _, row in results_df.iterrows():
-        if row['algorithm'] == 'GMM':
-            print(f"{row['algorithm']:<9} | {row['k']:<3} | {row['silhouette_score']:.4f}     | {row['bic_score']:.2f}")
-        else:
-            print(f"{row['algorithm']:<9} | {row['k']:<3} | {row['silhouette_score']:.4f}     | N/A")
+    # 1. DATASET CHARACTERISTICS ANALYSIS
+    print("\\n1. Dataset Characteristics Analysis...")
+    n_samples, n_features = X_scaled.shape
 
-    # Find best algorithm based on silhouette score
-    best_result = results_df.loc[results_df['silhouette_score'].idxmax()]
+    # Feature correlation analysis for PCA decision
+    corr_matrix = np.corrcoef(X_scaled.T)
+    high_corr_pairs = 0
+    for i in range(n_features):
+        for j in range(i+1, n_features):
+            if abs(corr_matrix[i,j]) > 0.8:
+                high_corr_pairs += 1
 
-    print(f"\\n=== TOURNAMENT WINNER ===")
-    print(f"Algorithm: {best_result['algorithm']}")
-    print(f"Clusters: {best_result['k']}")
-    print(f"Silhouette Score: {best_result['silhouette_score']:.4f}")
+    correlation_density = high_corr_pairs / (n_features * (n_features-1) / 2) if n_features > 1 else 0
 
-    if best_result['algorithm'] == 'GMM':
-        print(f"BIC Score: {best_result['bic_score']:.2f}")
+    print(f"   Dataset size: {n_samples} samples x {n_features} features")
+    print(f"   High correlation density: {correlation_density:.3f}")
+    print(f"   Feature variance spread: {X_scaled.var(axis=0).std():.3f}")
+
+    # 2. INTELLIGENT PCA DECISION
+    should_use_pca = False
+    pca_reason = ""
+
+    if n_features > 10:
+        should_use_pca = True
+        pca_reason = "High dimensionality (>10 features)"
+    elif correlation_density > 0.3:
+        should_use_pca = True
+        pca_reason = "High correlation density (>0.3)"
+    elif X_scaled.var(axis=0).std() > 2.0:
+        should_use_pca = True
+        pca_reason = "High variance spread between features"
+    else:
+        pca_reason = "Features are well-distributed, PCA not needed"
+
+    print(f"\\n2. PCA Decision: {'YES' if should_use_pca else 'NO'}")
+    print(f"   Reason: {pca_reason}")
+
+    # Apply PCA if intelligent analysis suggests it
+    if should_use_pca:
+        print("\\n   Applying PCA for dimensionality analysis...")
+        from sklearn.decomposition import PCA
+
+        pca = PCA()
+        pca_result = pca.fit_transform(X_scaled)
+
+        # Find optimal number of components (95% variance)
+        cumsum_var = np.cumsum(pca.explained_variance_ratio_)
+        optimal_components = np.argmax(cumsum_var >= 0.95) + 1
+
+        print(f"   Original features: {n_features}")
+        print(f"   95% variance captured in: {optimal_components} components")
+        print(f"   Dimensionality reduction: {(1 - optimal_components/n_features)*100:.1f}%")
+
+        # Re-run top 3 algorithms with PCA if reduction is significant
+        if optimal_components < n_features * 0.7:  # >30% reduction
+            print("   Significant reduction detected - retesting top algorithms with PCA")
+
+            # Get top 3 algorithm configs
+            top_3_configs = results_df.nlargest(3, 'silhouette_score')
+
+            pca_optimal = PCA(n_components=optimal_components)
+            X_pca = pca_optimal.fit_transform(X_scaled)
+
+            pca_results = []
+            for _, config in top_3_configs.iterrows():
+                try:
+                    algo_name = config['algorithm']
+                    variant = config.get('variant', 'standard')
+                    k = config['k']
+
+                    if algo_name == 'K-Means':
+                        model = KMeans(n_clusters=k, random_state=42, n_init=10)
+                    elif algo_name == 'GMM':
+                        model = GaussianMixture(n_components=k, random_state=42)
+                    elif algo_name == 'Hierarchical':
+                        from sklearn.cluster import AgglomerativeClustering
+                        model = AgglomerativeClustering(n_clusters=k, linkage=variant)
+                    else:
+                        continue  # Skip other algorithms for PCA test
+
+                    labels_pca = model.fit_predict(X_pca)
+                    sil_pca = silhouette_score(X_pca, labels_pca)
+
+                    pca_results.append({
+                        'algorithm': f"{algo_name}_PCA",
+                        'variant': variant,
+                        'k': k,
+                        'silhouette_score': sil_pca,
+                        'original_score': config['silhouette_score'],
+                        'improvement': sil_pca - config['silhouette_score'],
+                        'labels': labels_pca,
+                        'model': model,
+                        'pca_model': pca_optimal
+                    })
+
+                    print(f"     {algo_name} k={k}: {config['silhouette_score']:.4f} → {sil_pca:.4f} (Δ{sil_pca-config['silhouette_score']:+.4f})")
+
+                except Exception as e:
+                    continue
+
+            # Add PCA results to main results if they're better
+            for pca_result in pca_results:
+                if pca_result['improvement'] > 0.05:  # Significant improvement
+                    tournament_results.append(pca_result)
+
+    # 3. GRID SEARCH DECISION (for top performer)
+    print("\\n3. Grid Search Decision...")
+
+    # Rebuild results_df with potential PCA additions
+    results_df = pd.DataFrame(tournament_results)
+    current_best = results_df.loc[results_df['silhouette_score'].idxmax()]
+
+    should_grid_search = False
+    grid_reason = ""
+
+    # Grid search if: close competition OR best score is mediocre
+    top_3_scores = results_df.nlargest(3, 'silhouette_score')['silhouette_score'].values
+    score_spread = top_3_scores[0] - top_3_scores[-1] if len(top_3_scores) >= 3 else 1.0
+
+    if score_spread < 0.05:
+        should_grid_search = True
+        grid_reason = f"Close competition (spread: {score_spread:.4f})"
+    elif current_best['silhouette_score'] < 0.5:
+        should_grid_search = True
+        grid_reason = f"Mediocre best score ({current_best['silhouette_score']:.4f})"
+    elif n_samples > 1000 and current_best['silhouette_score'] > 0.7:
+        should_grid_search = True
+        grid_reason = "Large dataset with good initial performance"
+    else:
+        grid_reason = "Current best performance is satisfactory"
+
+    print(f"   Grid Search: {'YES' if should_grid_search else 'NO'}")
+    print(f"   Reason: {grid_reason}")
+
+    # Apply grid search if intelligent analysis suggests it
+    if should_grid_search:
+        print("\\n   Performing hyperparameter optimization for top performer...")
+
+        algo_name = current_best['algorithm']
+        base_k = current_best['k']
+
+        best_grid_score = current_best['silhouette_score']
+        best_grid_config = current_best
+
+        if 'K-Means' in algo_name:
+            # Grid search for K-Means
+            for init in ['k-means++', 'random']:
+                for n_init in [10, 20, 50]:
+                    for k in [base_k-1, base_k, base_k+1]:
+                        if k < 2:
+                            continue
+                        try:
+                            model = KMeans(n_clusters=k, init=init, n_init=n_init, random_state=42)
+                            labels = model.fit_predict(X_scaled)
+                            score = silhouette_score(X_scaled, labels)
+
+                            if score > best_grid_score:
+                                best_grid_score = score
+                                best_grid_config = {
+                                    'algorithm': f'K-Means_GridSearch',
+                                    'variant': f'init={init}_ninit={n_init}',
+                                    'k': k,
+                                    'silhouette_score': score,
+                                    'labels': labels,
+                                    'model': model
+                                }
+                                print(f"     New best: K-Means k={k} init={init} n_init={n_init}: {score:.4f}")
+                        except:
+                            continue
+
+        elif 'GMM' in algo_name:
+            # Grid search for GMM
+            for cov_type in ['full', 'tied', 'diag', 'spherical']:
+                for n_components in [base_k-1, base_k, base_k+1]:
+                    for max_iter in [100, 200]:
+                        if n_components < 2:
+                            continue
+                        try:
+                            model = GaussianMixture(n_components=n_components, covariance_type=cov_type,
+                                                 max_iter=max_iter, random_state=42)
+                            labels = model.fit_predict(X_scaled)
+                            score = silhouette_score(X_scaled, labels)
+
+                            if score > best_grid_score:
+                                best_grid_score = score
+                                best_grid_config = {
+                                    'algorithm': f'GMM_GridSearch',
+                                    'variant': f'cov={cov_type}_iter={max_iter}',
+                                    'k': n_components,
+                                    'silhouette_score': score,
+                                    'bic_score': model.bic(X_scaled),
+                                    'labels': labels,
+                                    'model': model
+                                }
+                                print(f"     New best: GMM n={n_components} cov={cov_type}: {score:.4f}")
+                        except:
+                            continue
+
+        # Update current best if grid search found improvements
+        if best_grid_score > current_best['silhouette_score']:
+            print(f"   Grid search improvement: {current_best['silhouette_score']:.4f} → {best_grid_score:.4f}")
+            current_best = best_grid_config
+
+    # 4. FINAL RESULTS ANALYSIS
+    print("\\n=== COMPREHENSIVE TOURNAMENT RESULTS ===")
+
+    # Sort all results by performance
+    results_df = pd.DataFrame(tournament_results)
+    top_10 = results_df.nlargest(10, 'silhouette_score')
+
+    print("\\nTop 10 Performers:")
+    print("Rank | Algorithm | Variant | k | Silhouette | Details")
+    print("-" * 70)
+
+    for i, (_, row) in enumerate(top_10.iterrows(), 1):
+        algo = row['algorithm']
+        variant = row.get('variant', 'std')[:10]
+        k = row['k']
+        sil = row['silhouette_score']
+
+        details = ""
+        if 'PCA' in algo:
+            details = "PCA"
+        elif 'GridSearch' in algo:
+            details = "Grid"
+        elif 'composite_score' in row:
+            details = f"CS:{row['composite_score']:.3f}"
+
+        print(f"{i:4d} | {algo:9s} | {variant:7s} | {k:1d} | {sil:10.4f} | {details}")
+
+    # Select final winner
+    final_winner = results_df.loc[results_df['silhouette_score'].idxmax()]
+
+    print(f"\\n=== FINAL TOURNAMENT WINNER ===")
+    print(f"Algorithm: {final_winner['algorithm']}")
+    print(f"Variant: {final_winner.get('variant', 'standard')}")
+    print(f"Clusters: {final_winner['k']}")
+    print(f"Silhouette Score: {final_winner['silhouette_score']:.4f}")
+
+    if 'bic_score' in final_winner:
+        print(f"BIC Score: {final_winner['bic_score']:.2f}")
 
     # Store winner information
-    winner_algorithm = best_result['algorithm']
-    winner_k = best_result['k']
-    winner_score = best_result['silhouette_score']
-    winner_labels = best_result['labels']
-    winner_model = best_result['model']
+    winner_algorithm = final_winner['algorithm']
+    winner_k = final_winner['k']
+    winner_score = final_winner['silhouette_score']
+    winner_labels = final_winner['labels']
+    winner_model = final_winner['model']
 
-    print(f"\\nWinner selected based on highest silhouette score: {winner_score:.4f}")
+    # Analysis summary
+    print(f"\\n=== INTELLIGENT ANALYSIS SUMMARY ===")
+    print(f"PCA Applied: {'Yes' if should_use_pca else 'No'} - {pca_reason}")
+    print(f"Grid Search: {'Yes' if should_grid_search else 'No'} - {grid_reason}")
+    print(f"Total Configurations Tested: {len(results_df)}")
+    print(f"Winner Selection: Empirically optimal for this dataset")
+
 else:
     print("ERROR: No tournament results available")
     winner_algorithm = 'KMeans'
