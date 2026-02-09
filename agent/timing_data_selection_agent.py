@@ -112,42 +112,38 @@ dataset['is_edge'] = (
 
 IMPORTANT: The table position IS the slew/load information. There are no separate 'slew' and 'load' columns. Row index maps to input slew, column index maps to output load. Use table positions for boundary case analysis, not assumed slew/load columns.
 
-## Expected Feature Set: 21-Column CSV Format
+## Dynamic Feature Discovery Protocol
 
-The CSV contains the following timing characterization features:
+The CSV structure is UNKNOWN and must be discovered dynamically. Never assume column names or meanings.
 
-**IDENTIFIER:**
-- `cell_arc_pt`: Compound identifier (cell#arc#direction_row_col)
+**DISCOVERY REQUIREMENTS:**
+1. MANDATORY schema discovery sequence (run first, every time):
+   ```
+   print("SCHEMA DISCOVERY:")
+   print("================")
+   print(f"Columns ({len(dataset.columns)}): {dataset.columns.tolist()}")
+   print(f"Shape: {dataset.shape}")
+   print(f"Types: {dataset.dtypes.to_dict()}")
+   print(dataset.head(3))
+   ```
 
-**CORE TIMING METRICS:**
-- `nominal_delay`: Nominal delay value under typical conditions
-- `delay`: Actual characterized delay value
-- `lib_sigma_delay_late`: Library sigma for late delay
-- `sigma_delay`: Delay sigma/variation
-- `nominal_tran`: Nominal transition/slew time
-- `transition`: Actual characterized transition time
-- `lib_sigma_tran_late`: Library sigma for late transition
-- `sigma_transition`: Transition sigma/variation
-- `mc_err_delay_late`: Monte Carlo error for late delay
-- `mc_err_transition`: Monte Carlo error for transition
+2. DYNAMIC feature interpretation based on actual column names:
+   - Numeric columns = potential features for analysis
+   - Object/string columns = potential identifiers or categorical data
+   - Look for timing-related patterns in column names (delay, sigma, tran, etc.)
+   - Identify process variation metrics by name patterns
+   - Find table position indicators if they exist
 
-**PROCESS VARIATION METRICS:**
-- `sigma_by_nominal`: Sigma normalized by nominal value (key risk metric)
-- `early_sigma_by_late_sigma`: Early-to-late sigma ratio
-- `stdev_by_late_sigma`: Standard deviation normalized by late sigma
-- `mnshift_by_late_sigma`: Mean shift normalized by late sigma
-- `skew_by_late_sigma`: Skewness normalized by late sigma
+3. ADAPTIVE analysis approach:
+   - Use ONLY columns that actually exist in the dataset
+   - Infer feature meanings from column names and data distributions
+   - No hardcoded assumptions about specific column names or count
+   - Build understanding from the actual data structure
 
-**CHARACTERIZATION CONDITIONS:**
-- `slew_point`: Input slew point index (maps to table_row)
-- `load_point`: Output load point index (maps to table_col)
-
-**CORRELATION METRICS:**
-- `cross_signal_enc`: Cross-signal encoding/correlation
-- `tran_nominal_by_delay_nominal`: Transition-to-delay ratio (nominal)
-- `tran_late_by_delay_late`: Transition-to-delay ratio (late corner)
-
-These 21 columns provide comprehensive timing analysis covering nominal values, process variation, characterization conditions, and cross-metric correlations for ASIC library characterization and ML model training.
+**FORBIDDEN:**
+- Never reference columns that weren't discovered in the schema output
+- Never assume specific column names exist
+- Never use hardcoded feature lists or expected schemas
 
 ## Tool Output Integrity
 
@@ -442,7 +438,7 @@ Would you stake your reputation on this selection for silicon signoff? Yes/No an
 # ==============================================================================
 TIMING_OBSERVE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
 - Dataset: {total_samples} timing arcs, {n_features} features, {n_cell_types} cell types
-- Method: [To be determined after timing domain analysis]
+- Method: [Agent will determine optimal approach based on discovered data characteristics]
 - Allocation: Target {target_count} samples ({target_percentage:.1f}%)
 - Key reasons: [Fill with specific statistics below]
 - Confidence: [Assess after domain analysis]
@@ -876,7 +872,7 @@ Extract and return ONLY valid JSON with these fields:
 - clustering_preference: string or null ("gmm", "kmeans", or null for auto)
 - additional_requirements: string or null for any special timing requirements
 
-For timing library characterization, always use uncertainty-based sampling (active learning).
+Choose the optimal sampling method based on the specific data characteristics discovered.
 If no percentage specified, the system will determine optimal percentage based on data analysis.
 
 Return ONLY the JSON object, nothing else.""")
@@ -902,16 +898,16 @@ Return ONLY the JSON object, nothing else.""")
                 except json.JSONDecodeError:
                     params = {
                         'selection_percentage': None,  # No default - will determine from data
-                        'selection_criteria': 'uncertainty',
-                        'clustering_preference': 'gmm',
-                        'additional_requirements': 'timing_signoff_focused'
+                        'selection_criteria': 'data_driven',  # Let agent decide based on data
+                        'clustering_preference': None,  # Let agent choose best method
+                        'additional_requirements': 'adaptive_method_selection'
                     }
             else:
                 params = {
                     'selection_percentage': None,  # No default - will determine from data
-                    'selection_criteria': 'uncertainty',
-                    'clustering_preference': 'gmm',
-                    'additional_requirements': 'timing_signoff_focused'
+                    'selection_criteria': 'data_driven',  # Let agent decide based on data
+                    'clustering_preference': None,  # Let agent choose best method
+                    'additional_requirements': 'adaptive_method_selection'
                 }
 
         # Store parameters for later processing after data is loaded
@@ -1354,7 +1350,7 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         return decision
 
     def act(self, decision: Dict[str, Any], strategy: Dict[str, Any]) -> Dict[str, Any]:
-        """ACT stage with timing-optimized uncertainty sampling."""
+        """ACT stage with adaptive sampling method selection based on data characteristics."""
         self._load_imports()
         print("\n" + "=" * 100)
         print("[4] STAGE 4: ACT - Timing-Optimized Sample Selection & Validation")
@@ -1512,11 +1508,33 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
                 pca_final = PCA(n_components=n_components)
                 features_pca = pca_final.fit_transform(features_scaled)
 
-                # Use GMM as default for agentic mode (handles overlapping distributions better)
+                # Let agent choose optimal clustering method based on data characteristics
                 best_k = min(10, len(self.current_data) // 100)  # Adaptive cluster count
-                final_model = GaussianMixture(n_components=best_k, random_state=42)
-                final_labels = final_model.fit_predict(features_pca)
-                centroids = final_model.means_
+
+                # Try both methods and let agent choose based on data characteristics
+                from sklearn.cluster import KMeans
+                kmeans_model = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+                kmeans_labels = kmeans_model.fit_predict(features_pca)
+                kmeans_inertia = kmeans_model.inertia_
+
+                gmm_model = GaussianMixture(n_components=best_k, random_state=42)
+                gmm_labels = gmm_model.fit_predict(features_pca)
+                gmm_bic = gmm_model.bic(features_pca)
+
+                # Simple heuristic: use method with better relative performance
+                # GMM better for overlapping clusters, K-means for well-separated
+                use_gmm = gmm_bic < -1000 * best_k  # GMM has good fit if BIC is sufficiently negative
+
+                if use_gmm:
+                    final_model = gmm_model
+                    final_labels = gmm_labels
+                    centroids = final_model.means_
+                    print(f"Selected GMM (BIC: {gmm_bic:.0f})")
+                else:
+                    final_model = kmeans_model
+                    final_labels = kmeans_labels
+                    centroids = final_model.cluster_centers_
+                    print(f"Selected K-means (inertia: {kmeans_inertia:.0f})")
 
                 distances = cdist(features_pca, centroids, metric='euclidean')
                 min_distances = np.min(distances, axis=1)
@@ -2585,7 +2603,7 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
         <div class="card">
             <h2>Feature Distribution: Selected vs Full Dataset</h2>
             <table>
-                <tr><th>Feature</th><th>Full μ</th><th>Sel μ</th><th>Full σ</th><th>Sel σ</th><th>Δ%</th></tr>
+                <tr><th>Feature</th><th>Full Mean</th><th>Sel Mean</th><th>Full Std</th><th>Sel Std</th><th>Delta%</th></tr>
                 {feature_rows}
             </table>
             <p style="font-size:0.75em;color:#64748B;margin-top:8px">
@@ -2607,7 +2625,7 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
         html_path = os.path.join(tempfile.gettempdir(), html_filename)
 
         try:
-            with open(html_path, 'w') as f:
+            with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(html)
             print(f"[OK] Self-contained dashboard exported: {html_path} ({len(html)} bytes)")
         except Exception as e:
