@@ -752,6 +752,7 @@ class TimingDataSelectionAgent:
         """Initialize persistent execution context with core libraries."""
         import io
         import sys
+        import numpy as np
 
         self.execution_context = {
             'pd': pd,
@@ -772,7 +773,7 @@ class TimingDataSelectionAgent:
             from sklearn.decomposition import PCA
             from sklearn.manifold import TSNE
             import matplotlib.pyplot as plt
-            import seaborn as sns
+            import numpy as np
 
             self.execution_context.update({
                 'StandardScaler': StandardScaler,
@@ -782,7 +783,7 @@ class TimingDataSelectionAgent:
                 'PCA': PCA,
                 'TSNE': TSNE,
                 'plt': plt,
-                'sns': sns
+                'np': np
             })
 
     def execute_python_code(self, code: str) -> str:
@@ -2679,7 +2680,6 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
 # COMPREHENSIVE VISUALIZATION DASHBOARD GENERATION
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -2757,10 +2757,23 @@ if X_scaled is not None and len(feature_names) > 0:
         corr_diff = np.abs(corr_original - corr_selected)
 
         ax2 = axes[0, 1]
-        sns.heatmap(corr_diff, annot=True, cmap='Reds', ax=ax2,
-                   xticklabels=[f[:8] for f in feature_names[:10]],
-                   yticklabels=[f[:8] for f in feature_names[:10]],
-                   cbar_kws={'label': 'Correlation Difference'})
+        # Use matplotlib imshow instead of seaborn heatmap
+        im = ax2.imshow(corr_diff, cmap='Reds', aspect='auto')
+        ax2.set_xticks(range(len(feature_names[:10])))
+        ax2.set_yticks(range(len(feature_names[:10])))
+        ax2.set_xticklabels([f[:8] for f in feature_names[:10]], rotation=45)
+        ax2.set_yticklabels([f[:8] for f in feature_names[:10]])
+
+        # Add colorbar
+        plt.colorbar(im, ax=ax2, label='Correlation Difference')
+
+        # Add text annotations
+        for i in range(len(feature_names[:10])):
+            for j in range(len(feature_names[:10])):
+                if i < corr_diff.shape[0] and j < corr_diff.shape[1]:
+                    ax2.text(j, i, f'{corr_diff.iloc[i, j]:.2f}',
+                            ha='center', va='center', color='white' if corr_diff.iloc[i, j] > 0.5 else 'black')
+
         ax2.set_title('Correlation Delta: Original vs Selected', color='white')
 
         print("   - Correlation heatmap complete")
