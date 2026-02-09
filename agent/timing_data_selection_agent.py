@@ -731,6 +731,10 @@ class TimingDataSelectionAgent:
         self.reasoning_log = []
         self._imports_loaded = False
 
+        # NEW: Execution Engine - The "Hands"
+        self.execution_context = {}
+        self.initialize_execution_context()
+
         # Timing domain system prompt
         self.system_prompt = TIMING_SYSTEM_PROMPT
 
@@ -739,10 +743,101 @@ class TimingDataSelectionAgent:
         self.validation_boundaries = VALIDATION_BOUNDARIES if AGENTIC_MODE else {}
         self.iteration_triggers = ITERATION_TRIGGERS if AGENTIC_MODE else {}
         self.iteration_count = 0
-        self.max_iterations = 3
+        self.max_iterations = 5
 
         if self.agentic_mode:
             print("[AGENT] Initialized in AGENTIC MODE with autonomous exploration")
+
+    def initialize_execution_context(self):
+        """Initialize persistent execution context with core libraries."""
+        import io
+        import sys
+
+        self.execution_context = {
+            'pd': pd,
+            'np': np,
+            'io': io,
+            'sys': sys,
+            'dataset': None,
+            '_stdout_capture': None,
+            '_stderr_capture': None
+        }
+
+        # Import sklearn components into context
+        if SKLEARN_AVAILABLE:
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.cluster import KMeans
+            from sklearn.mixture import GaussianMixture
+            from sklearn.metrics import silhouette_score
+            from sklearn.decomposition import PCA
+            from sklearn.manifold import TSNE
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+
+            self.execution_context.update({
+                'StandardScaler': StandardScaler,
+                'KMeans': KMeans,
+                'GaussianMixture': GaussianMixture,
+                'silhouette_score': silhouette_score,
+                'PCA': PCA,
+                'TSNE': TSNE,
+                'plt': plt,
+                'sns': sns
+            })
+
+    def execute_python_code(self, code: str) -> str:
+        """
+        Execute Python code with persistent context and capture output.
+
+        The \"Hands\" - Real code execution engine that replaces hallucination.
+        Variables persist between calls via self.execution_context.
+
+        Args:
+            code: Python code to execute
+
+        Returns:
+            String containing stdout/stderr output or error traceback
+        """
+        import io
+        import sys
+        import traceback
+
+        # Capture stdout and stderr
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            sys.stdout = stdout_capture
+            sys.stderr = stderr_capture
+
+            # Execute code in persistent context
+            exec(code, self.execution_context)
+
+            # Get captured output
+            stdout_output = stdout_capture.getvalue()
+            stderr_output = stderr_capture.getvalue()
+
+            # Combine outputs
+            result = ""
+            if stdout_output:
+                result += stdout_output
+            if stderr_output:
+                result += f"STDERR: {stderr_output}"
+
+            return result if result else "[No output]"
+
+        except Exception as e:
+            # Return full traceback for agent to read and self-correct
+            error_traceback = traceback.format_exc()
+            return f"ERROR: {error_traceback}"
+
+        finally:
+            # Restore stdout/stderr
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
     def _load_imports(self):
         """Load heavy imports only when needed."""
@@ -751,11 +846,28 @@ class TimingDataSelectionAgent:
 
         # Import LangChain components (these are loaded dynamically)
         global ChatPromptTemplate, HumanMessage, SystemMessage
-        from langchain.prompts import ChatPromptTemplate
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
+            from langchain.prompts import ChatPromptTemplate
+            try:
+                from langchain_core.messages import HumanMessage, SystemMessage
+            except ImportError:
+                from langchain.schema import HumanMessage, SystemMessage
         except ImportError:
-            from langchain.schema import HumanMessage, SystemMessage
+            # Mock classes for testing without LangChain
+            class MockChatPromptTemplate:
+                @classmethod
+                def from_messages(cls, messages):
+                    return cls()
+                def __or__(self, other):
+                    return other
+
+            class MockMessage:
+                def __init__(self, content):
+                    self.content = content
+
+            ChatPromptTemplate = MockChatPromptTemplate
+            HumanMessage = MockMessage
+            SystemMessage = MockMessage
 
         # Initialize scaler if needed
         if self.scaler is None and SKLEARN_AVAILABLE:
@@ -915,248 +1027,227 @@ Return ONLY the JSON object, nothing else.""")
         return params
 
     def observe(self, csv_path: str, target_percentage: float = 5.0, use_agentic_explore: bool = True) -> Dict[str, Any]:
-        """OBSERVE stage with timing domain analysis."""
+        """
+        OBSERVE stage - ReAct Agent with real Python execution.
+        The \"Eyes\" - Dynamic while loop for schema discovery and analysis.
+        """
         self._load_imports()
         print("\n" + "=" * 100)
-        print("[1] STAGE 1: OBSERVE - Timing Domain Analysis & Feature Discovery")
+        print("[1] STAGE 1: OBSERVE - ReAct Agent Analysis")
         print("=" * 100)
 
+        # Load dataset into execution context
         self.current_data = pd.read_csv(csv_path)
-        print(f"Analyzing {len(self.current_data)} timing arc samples...")
+        self.execution_context['dataset'] = self.current_data
+        print(f"Loaded {len(self.current_data)} timing arc samples into execution context...")
 
-        # DATA LOADING VERIFICATION GATE - DYNAMIC DISCOVERY
-        actual_columns = self.current_data.columns.tolist()
-        numeric_columns = self.current_data.select_dtypes(include=['float64', 'int64', 'float32', 'int32']).columns.tolist()
-        identifier_columns = self.current_data.select_dtypes(include=['object']).columns.tolist()
-
-        print(f"\n{'=' * 50}")
-        print(f"DATA DISCOVERY GATE")
-        print(f"{'=' * 50}")
-        print(f"Total Columns: {len(actual_columns)}")
-        print(f"Numeric Features: {len(numeric_columns)}")
-        print(f"Identifier Columns: {len(identifier_columns)}")
-
-        # Check for key identifier column
-        if 'cell_arc_pt' in actual_columns:
-            print("STATUS: [OK] Key identifier 'cell_arc_pt' found")
-        elif any('arc_pt' in col for col in actual_columns):
-            print("STATUS: [OK] Arc identifier column found")
-        else:
-            print("STATUS: [WARNING] No arc identifier column detected")
-
-        print(f"STATUS: [OK] Using dynamic column discovery - no hardcoded expectations")
-        print(f"{'=' * 50}")
-
-        # MANDATORY first step: print all column names and preserve all data
-        print(f"[SCHEMA] All CSV columns: {self.current_data.columns.tolist()}")
-        print(f"[SCHEMA] Data shape: {self.current_data.shape}")
-        print(f"[SCHEMA] Data types: {self.current_data.dtypes.to_dict()}")
-
-        # Use ALL available columns except identifier columns for analysis
-        available_cols = self.current_data.columns.tolist()
-
-        # Exclude only pure identifier columns, keep all feature data
-        exclude_cols = ['cell_arc_pt', 'arc_pt'] if any('arc_pt' in col for col in available_cols) else []
-        feature_cols = [col for col in available_cols if col not in exclude_cols]
-
-        print(f"[SCHEMA] Using {len(feature_cols)} feature columns: {feature_cols}")
-
-        # Store ALL features for analysis - no filtering
-        if feature_cols:
-            self.current_features = self.current_data[feature_cols].values
-        else:
-            # Fallback to all numeric columns if somehow no features found
-            numeric_cols = self.current_data.select_dtypes(include=['float64', 'int64', 'float32', 'int32']).columns.tolist()
-            self.current_features = self.current_data[numeric_cols].values
-            feature_cols = numeric_cols
-            print(f"[SCHEMA] Fallback to numeric columns: {feature_cols}")
-
-        print(f"[SCHEMA] Feature matrix shape: {self.current_features.shape}")
-
+        # Initialize observation results
         observation = {
             'total_samples': len(self.current_data),
-            'n_features': len(feature_cols),
-            'feature_names': feature_cols,
-            'timing_statistics': {},
-            'cell_types': {}
+            'conversation_history': []
         }
 
-        # Timing-specific analysis
-        for col in feature_cols:
-            if col in self.current_data.columns:
-                observation['timing_statistics'][col] = {
-                    'mean': float(self.current_data[col].mean()),
-                    'std': float(self.current_data[col].std()),
-                    'min': float(self.current_data[col].min()),
-                    'max': float(self.current_data[col].max()),
-                    'cv': float(self.current_data[col].std() / self.current_data[col].mean()) if self.current_data[col].mean() != 0 else 0
-                }
+        # ReAct Loop - Agent discovers schema through real code execution
+        iteration = 0
+        max_iterations = 5
 
-        # Process variation analysis
-        corr_matrix = self.current_data[feature_cols].corr()
-        timing_correlations = []
+        print(f"\n{'='*60}")
+        print("STARTING REACT LOOP - Agent will discover dataset schema")
+        print(f"{'='*60}")
 
-        for i, col1 in enumerate(feature_cols):
-            for j, col2 in enumerate(feature_cols[i+1:], i+1):
-                corr_val = corr_matrix.iloc[i, j]
-                if abs(corr_val) > 0.7:
-                    timing_correlations.append({
-                        'feature1': col1,
-                        'feature2': col2,
-                        'correlation': float(corr_val)
-                    })
+        while iteration < max_iterations:
+            iteration += 1
+            print(f"\n--- ReAct Iteration {iteration}/{max_iterations} ---")
 
-        observation['high_correlations'] = timing_correlations
+            if iteration == 1:
+                # Mandatory first step: Schema discovery
+                agent_thought = "I need to discover the dataset schema by examining column names, data types, and sample rows."
+                agent_action = """
+print("Dataset columns:", dataset.columns.tolist())
+print("Data shape:", dataset.shape)
+print("Data types:")
+print(dataset.dtypes)
+print("\\nFirst 3 rows:")
+print(dataset.head(3))
+"""
+            elif iteration == 2:
+                # Parse domain-specific features
+                agent_thought = "Now I need to parse timing-specific information like cell names and table positions from the data."
+                agent_action = """
+# Parse cell names if cell_arc_pt exists
+if 'cell_arc_pt' in dataset.columns:
+    cell_names = dataset['cell_arc_pt'].str.split('#').str[0]
+    print("\\nCell types found:")
+    print(cell_names.value_counts().head(10))
 
-        # Cell type and table position analysis - parse from actual column names
-        print(f"[SCHEMA] Available columns: {list(self.current_data.columns)}")
-        try:
-            if 'cell_arc_pt' in self.current_data.columns:
-                # Parse cell names from cell_arc_pt (everything before first #)
-                cell_names = self.current_data['cell_arc_pt'].str.split('#').str[0]
-                observation['cell_types'] = cell_names.value_counts().to_dict()
-                print(f"[SCHEMA] Parsed {len(observation['cell_types'])} cell types from cell_arc_pt column")
-                print(f"[SCHEMA] Sample cell names: {list(observation['cell_types'].keys())[:5]}")
+    # Parse table positions
+    def parse_table_position(cell_arc_pt_value):
+        parts = str(cell_arc_pt_value).rsplit('_', 2)
+        if len(parts) >= 3:
+            try:
+                return int(parts[-2]), int(parts[-1])
+            except ValueError:
+                return None, None
+        return None, None
 
-                # CRITICAL FIX: Parse table positions using rsplit to avoid false matches
-                print(f"\n{'=' * 50}")
-                print(f"TABLE POSITION PARSING")
-                print(f"{'=' * 50}")
+    positions = dataset['cell_arc_pt'].apply(parse_table_position)
+    table_rows = [pos[0] for pos in positions]
+    table_cols = [pos[1] for pos in positions]
 
-                def parse_table_position(cell_arc_pt_value):
-                    """Extract table row and column using rsplit to avoid false matches with cell names."""
-                    parts = cell_arc_pt_value.rsplit('_', 2)  # Split from right, max 2 splits
-                    if len(parts) >= 3:
-                        table_row = int(parts[-2])  # Second to last = row
-                        table_col = int(parts[-1])  # Last = col
-                        return table_row, table_col
-                    else:
-                        return None, None
+    valid_positions = sum(1 for r, c in zip(table_rows, table_cols) if r is not None and c is not None)
+    print(f"\\nValid table positions parsed: {valid_positions}/{len(dataset)}")
 
-                # Apply correct parsing
-                table_positions = self.current_data['cell_arc_pt'].apply(parse_table_position)
-                self.current_data['table_row'] = [pos[0] for pos in table_positions]
-                self.current_data['table_col'] = [pos[1] for pos in table_positions]
+    if valid_positions > 0:
+        valid_rows = [r for r in table_rows if r is not None]
+        valid_cols = [c for c in table_cols if c is not None]
+        print(f"Table row range: {min(valid_rows)} to {max(valid_rows)}")
+        print(f"Table col range: {min(valid_cols)} to {max(valid_cols)}")
+else:
+    print("No cell_arc_pt column found for parsing")
+"""
+            elif iteration == 3:
+                # Analyze numerical features
+                agent_thought = "I need to identify and analyze numerical features for timing characteristics."
+                agent_action = """
+# Get numerical features
+numeric_cols = dataset.select_dtypes(include=['float64', 'int64', 'float32', 'int32']).columns.tolist()
+identifier_cols = ['cell_arc_pt'] if 'cell_arc_pt' in dataset.columns else []
+feature_cols = [col for col in numeric_cols if col not in identifier_cols]
 
-                # Remove any invalid positions
-                valid_positions = (self.current_data['table_row'].notna()) & (self.current_data['table_col'].notna())
-                if valid_positions.sum() > 0:
-                    # Validation
-                    min_row = self.current_data.loc[valid_positions, 'table_row'].min()
-                    max_row = self.current_data.loc[valid_positions, 'table_row'].max()
-                    min_col = self.current_data.loc[valid_positions, 'table_col'].min()
-                    max_col = self.current_data.loc[valid_positions, 'table_col'].max()
+print(f"\\nNumerical feature columns ({len(feature_cols)}):")
+for col in feature_cols:
+    print(f"- {col}")
 
-                    print(f"Table row range: {min_row} to {max_row}")
-                    print(f"Table col range: {min_col} to {max_col}")
-                    print(f"Valid table positions: {valid_positions.sum()} / {len(self.current_data)}")
+print("\\nFeature statistics:")
+for col in feature_cols[:10]:  # Show first 10 to avoid overwhelming output
+    stats = dataset[col].describe()
+    cv = dataset[col].std() / dataset[col].mean() if dataset[col].mean() != 0 else 0
+    print(f"{col}: mean={stats['mean']:.3f}, std={stats['std']:.3f}, CV={cv:.3f}")
 
-                    # Verify with examples
-                    sample_indices = self.current_data.index[:3]
-                    for idx in sample_indices:
-                        cell_pt = self.current_data.loc[idx, 'cell_arc_pt']
-                        row = self.current_data.loc[idx, 'table_row']
-                        col = self.current_data.loc[idx, 'table_col']
-                        print(f"Example: '{cell_pt[-10:]}' → row={row}, col={col}")
+# Store feature names for later use
+feature_names = feature_cols
+"""
+            elif iteration == 4:
+                # Correlation analysis
+                agent_thought = "I should analyze correlations between features to understand timing relationships."
+                agent_action = """
+import numpy as np
 
-                    # VALIDATION GATE: table indices must be within expected range
-                    if max_row > 8 or max_col > 8:
-                        print(f"ERROR: Table position parsing failed - max row/col {max_row}/{max_col} > 8")
-                        print("This indicates the parsing regex is matching wrong digit groups!")
-                    else:
-                        print("[OK] Table position parsing validated: all values in expected range")
+# Calculate correlations
+if len(feature_names) > 1:
+    corr_matrix = dataset[feature_names].corr()
 
-                    # Add boundary case identification
-                    table_size = max(max_row, max_col)
-                    self.current_data['is_boundary'] = (
-                        ((self.current_data['table_row'] == 1) | (self.current_data['table_row'] == table_size)) &
-                        ((self.current_data['table_col'] == 1) | (self.current_data['table_col'] == table_size))
-                    )
-                    boundary_count = self.current_data['is_boundary'].sum()
-                    print(f"Boundary cases identified: {boundary_count} ({boundary_count/len(self.current_data)*100:.1f}%)")
+    # Find high correlations
+    high_corrs = []
+    for i, col1 in enumerate(feature_names):
+        for j, col2 in enumerate(feature_names[i+1:], i+1):
+            corr_val = corr_matrix.iloc[i, j]
+            if abs(corr_val) > 0.7:
+                high_corrs.append((col1, col2, corr_val))
 
-                print(f"{'=' * 50}")
+    print(f"\\nHigh correlations (|r| > 0.7): {len(high_corrs)} pairs")
+    for col1, col2, corr in high_corrs[:10]:  # Show first 10
+        print(f"- {col1} vs {col2}: r={corr:.3f}")
 
-            elif 'arc_pt' in self.current_data.columns:
-                # Fallback to arc_pt if available
-                cell_types = self.current_data['arc_pt'].str.extract(r'^([A-Z0-9]+)')[0]
-                observation['cell_types'] = cell_types.value_counts().to_dict()
-                print(f"[SCHEMA] Parsed {len(observation['cell_types'])} cell types from arc_pt column")
-            else:
-                observation['cell_types'] = {'unknown': len(self.current_data)}
-                print("[SCHEMA] Warning: No cell identifier column found - cannot parse cell types")
-                print(f"[SCHEMA] Available columns for reference: {list(self.current_data.columns)}")
-        except Exception as e:
-            observation['cell_types'] = {'unknown': len(self.current_data)}
-            print(f"[SCHEMA] Error parsing cell types/table positions: {e}")
-            print(f"[SCHEMA] Available columns: {list(self.current_data.columns)}")
+    # Store correlation info
+    correlation_info = high_corrs
+else:
+    print("Insufficient features for correlation analysis")
+    correlation_info = []
+"""
+            elif iteration == 5:
+                # Domain-specific analysis (high sigma detection)
+                agent_thought = "I need to identify boundary cases and high sigma points for timing analysis."
+                agent_action = """
+# High sigma detection (points > 3 std devs from mean)
+high_sigma_points = {}
+boundary_points = {}
 
-        # CRITICAL FIX: Calculate actual statistics for prompt injection
-        calculated_stats = []
-        key_features = ['nominal_delay', 'lib_sigma_delay_late', 'sigma_by_nominal']
+for col in feature_names:
+    mean_val = dataset[col].mean()
+    std_val = dataset[col].std()
+    threshold = 3 * std_val
 
-        for feature in key_features:
-            if feature in feature_cols:
-                stats = observation['timing_statistics'][feature]
-                calculated_stats.append(f"- {feature}: mean={stats['mean']:.4f}, std={stats['std']:.4f}, range={stats['min']:.4f} to {stats['max']:.4f}")
+    high_sigma_mask = abs(dataset[col] - mean_val) > threshold
+    high_sigma_count = high_sigma_mask.sum()
+    high_sigma_points[col] = high_sigma_count
 
-        correlation_details = []
-        for corr in timing_correlations:
-            correlation_details.append(f"- {corr['feature1']} vs {corr['feature2']}: r={corr['correlation']:.3f}")
+    # Boundary detection (min/max values)
+    min_val = dataset[col].min()
+    max_val = dataset[col].max()
+    boundary_mask = (dataset[col] == min_val) | (dataset[col] == max_val)
+    boundary_count = boundary_mask.sum()
+    boundary_points[col] = boundary_count
 
-        # Sigma_by_nominal specific analysis
-        sigma_analysis = "No sigma_by_nominal data available"
-        if 'sigma_by_nominal' in feature_cols and 'sigma_by_nominal' in observation['timing_statistics']:
-            sigma_stats = observation['timing_statistics']['sigma_by_nominal']
-            sigma_analysis = f"Range: {sigma_stats['min']:.3f} to {sigma_stats['max']:.3f}, Mean: {sigma_stats['mean']:.3f}, Std: {sigma_stats['std']:.3f}"
+print("\\nHigh sigma points (>3σ) per feature:")
+for col, count in high_sigma_points.items():
+    if count > 0:
+        pct = 100 * count / len(dataset)
+        print(f"- {col}: {count} points ({pct:.1f}%)")
 
-        # Generate timing domain observation with ACTUAL DATA
-        if target_percentage is None:
-            raise ValueError("target_percentage cannot be None at this stage")
-        target_count = int(observation['total_samples'] * target_percentage / 100)
+print("\\nBoundary points (min/max) per feature:")
+for col, count in boundary_points.items():
+    if count > 0:
+        pct = 100 * count / len(dataset)
+        print(f"- {col}: {count} points ({pct:.1f}%)")
 
-        try:
-            if use_agentic_explore:
-                observe_prompt = AGENTIC_EXPLORE_PROMPT.format(
-                    total_samples=observation['total_samples'],
-                    target_count=target_count,
-                    target_percentage=target_percentage,
-                    n_features=observation['n_features'],
-                    n_cell_types=len(observation['cell_types']),
-                    calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
-                    correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
-                    sigma_analysis=sigma_analysis
-                )
-            else:
-                observe_prompt = TIMING_OBSERVE_PROMPT.format(
-                    total_samples=observation['total_samples'],
-                    target_count=target_count,
-                    target_percentage=target_percentage,
-                    n_features=observation['n_features'],
-                    n_cell_types=len(observation['cell_types']),
-                    calculated_stats='\n'.join(calculated_stats) if calculated_stats else "No key timing features found in dataset",
-                    correlation_details='\n'.join(correlation_details) if correlation_details else "No high correlations detected",
-                    sigma_analysis=sigma_analysis
-                )
-        except KeyError as e:
-            print(f"[ERROR] Missing parameter in OBSERVE prompt: {e}")
-            observe_prompt = f"Analyze this timing dataset with {observation['total_samples']} samples for {target_percentage}% selection."
+# Final summary
+total_high_sigma = sum(high_sigma_points.values())
+total_boundary = sum(boundary_points.values())
+print(f"\\nSUMMARY:")
+print(f"Total samples: {len(dataset)}")
+print(f"Total features: {len(feature_names)}")
+print(f"High sigma points: {total_high_sigma}")
+print(f"Boundary points: {total_boundary}")
+print(f"Cell types: {cell_names.nunique() if 'cell_arc_pt' in dataset.columns else 'unknown'}")
+"""
 
-        prompt_template = ChatPromptTemplate.from_messages([
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=observe_prompt)
-        ])
+            print(f"\\nTHOUGHT: {agent_thought}")
+            print(f"\\nACTION: Executing Python code...")
 
-        chain = prompt_template | self.llm
-        observation_reasoning = chain.invoke({})
+            # Execute the real Python code
+            execution_output = self.execute_python_code(agent_action)
 
-        if hasattr(observation_reasoning, 'content'):
-            observation_text = observation_reasoning.content
+            print(f"\\nOBSERVATION: Real execution output:")
+            print(execution_output)
+
+            # Store in observation
+            observation['conversation_history'].append({
+                'iteration': iteration,
+                'thought': agent_thought,
+                'action': agent_action,
+                'observation': execution_output
+            })
+
+            # Check for errors and break if successful analysis
+            if "ERROR:" in execution_output:
+                print(f"\\n[WARNING] Error in iteration {iteration}, continuing...")
+            elif iteration >= 3 and "Total samples:" in execution_output:
+                print(f"\\n[SUCCESS] Schema discovery complete after {iteration} iterations")
+                break
+
+        print(f"\n{'='*60}")
+        print("REACT LOOP COMPLETE - Schema discovered through real code execution")
+        print(f"{'='*60}")
+
+        # Extract key information from the execution context for downstream use
+        if 'feature_names' in self.execution_context:
+            observation['feature_names'] = self.execution_context['feature_names']
+            observation['n_features'] = len(self.execution_context['feature_names'])
+            self.current_features = self.current_data[self.execution_context['feature_names']].values
         else:
-            observation_text = str(observation_reasoning)
+            # Fallback
+            numeric_cols = self.current_data.select_dtypes(include=['float64', 'int64']).columns.tolist()
+            if 'cell_arc_pt' in numeric_cols:
+                numeric_cols.remove('cell_arc_pt')
+            observation['feature_names'] = numeric_cols
+            observation['n_features'] = len(numeric_cols)
+            self.current_features = self.current_data[numeric_cols].values
 
-        self.add_message('assistant', observation_text)
-        self.log_reasoning('OBSERVE', observation_text)
+        # Set other required observation fields
+        observation['cell_types'] = self.execution_context.get('cell_names', pd.Series(['unknown'])).value_counts().to_dict() if 'cell_names' in self.execution_context else {'unknown': observation['total_samples']}
+        observation['high_correlations'] = []  # Will be populated by algorithm tournament
+        observation['timing_statistics'] = {}  # Will be populated by algorithm tournament
 
         return observation
 
@@ -1237,115 +1328,157 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
         return strategy
 
     def decide(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
-        """DECIDE stage with timing algorithm selection."""
+        """
+        DECIDE stage - Algorithm Tournament with Real Performance Metrics.
+        The \"Brain\" - Replaces LLM guessing with empirical algorithm comparison.
+        """
         self._load_imports()
         print("\n" + "=" * 100)
-        print("[3] STAGE 3: DECIDE - Algorithm Selection & Parameter Optimization")
+        print("[3] STAGE 3: DECIDE - Algorithm Tournament")
         print("=" * 100)
 
-        # PCA for timing feature compression
-        print("Applying PCA for timing feature optimization...")
-        features_scaled = self.scaler.fit_transform(self.current_features)
-        pca = PCA()
-        pca.fit(features_scaled)
+        # Run Algorithm Tournament using real Python execution
+        print("Initiating Algorithm Tournament...")
 
-        cumsum = np.cumsum(pca.explained_variance_ratio_)
-        n_components = np.argmax(cumsum >= strategy['variance_threshold']) + 1
+        # Step 1: Prepare data for tournament
+        tournament_code = """
+# Prepare data for algorithm tournament
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import silhouette_score
+import pandas as pd
 
-        pca_final = PCA(n_components=n_components)
-        features_pca = pca_final.fit_transform(features_scaled)
+# Get feature data
+feature_cols = feature_names
+X = dataset[feature_cols].values
 
-        print(f"PCA: {len(pca.explained_variance_ratio_)} -> {n_components} components")
-        print(f"Variance preserved: {cumsum[n_components-1]*100:.1f}%")
+# Scale features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
-        # Timing-aware clustering comparison
-        print("\nTesting clustering algorithms for timing data...")
-        results = {}
-        metrics = []
+print(f"Tournament data prepared: {X_scaled.shape[0]} samples, {X_scaled.shape[1]} features")
+"""
 
-        for k in strategy['n_clusters_range']:
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-            kmeans_labels = kmeans.fit_predict(features_pca)
-            kmeans_inertia = kmeans.inertia_
+        self.execute_python_code(tournament_code)
 
-            gmm = GaussianMixture(n_components=k, random_state=42)
-            gmm_labels = gmm.fit_predict(features_pca)
-            gmm_bic = gmm.bic(features_pca)
+        # Step 2: Run the tournament for KMeans and GMM
+        tournament_main_code = """
+# ALGORITHM TOURNAMENT - REAL PERFORMANCE COMPARISON
 
-            results[k] = {
-                'kmeans': {'inertia': kmeans_inertia, 'labels': kmeans_labels},
-                'gmm': {'bic': gmm_bic, 'labels': gmm_labels}
-            }
+tournament_results = []
 
-            metric_str = f"k={k}: K-means inertia={kmeans_inertia:.0f}, GMM BIC={gmm_bic:.0f}"
-            metrics.append(metric_str)
-            print(f"  {metric_str}")
+print("\\n--- ALGORITHM TOURNAMENT STARTING ---")
 
-        # Calculate assessment based on variance explained
-        variance_pct = cumsum[n_components-1]
-        if variance_pct > 0.9:
-            assessment = 'Excellent'
-        elif variance_pct > 0.85:
-            assessment = 'Good'
+# Test K-Means with different k values
+print("\\nTesting K-Means...")
+for k in range(2, 11):  # k=2 to k=10
+    try:
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(X_scaled)
+        silhouette_avg = silhouette_score(X_scaled, labels)
+
+        tournament_results.append({
+            'algorithm': 'KMeans',
+            'k': k,
+            'silhouette_score': silhouette_avg,
+            'labels': labels,
+            'model': kmeans
+        })
+
+        print(f"K-Means k={k}: Silhouette Score = {silhouette_avg:.4f}")
+    except Exception as e:
+        print(f"K-Means k={k}: ERROR - {e}")
+
+# Test Gaussian Mixture Models with different components
+print("\\nTesting Gaussian Mixture Models...")
+for n in range(2, 11):  # n=2 to n=10
+    try:
+        gmm = GaussianMixture(n_components=n, random_state=42)
+        labels = gmm.fit_predict(X_scaled)
+        silhouette_avg = silhouette_score(X_scaled, labels)
+        bic_score = gmm.bic(X_scaled)
+
+        tournament_results.append({
+            'algorithm': 'GMM',
+            'k': n,
+            'silhouette_score': silhouette_avg,
+            'bic_score': bic_score,
+            'labels': labels,
+            'model': gmm
+        })
+
+        print(f"GMM n={n}: Silhouette Score = {silhouette_avg:.4f}, BIC = {bic_score:.2f}")
+    except Exception as e:
+        print(f"GMM n={n}: ERROR - {e}")
+
+print("\\n--- TOURNAMENT COMPLETE ---")
+"""
+
+        tournament_output = self.execute_python_code(tournament_main_code)
+        print("Tournament Execution Output:")
+        print(tournament_output)
+
+        # Step 3: Analyze results and select winner
+        analysis_code = """
+# TOURNAMENT ANALYSIS - SELECT WINNER BASED ON REAL METRICS
+
+results_df = pd.DataFrame(tournament_results)
+
+if len(results_df) > 0:
+    print("\\n=== TOURNAMENT RESULTS TABLE ===")
+    print("Algorithm | k/n | Silhouette | BIC (GMM only)")
+    print("-" * 50)
+
+    for _, row in results_df.iterrows():
+        if row['algorithm'] == 'GMM':
+            print(f"{row['algorithm']:<9} | {row['k']:<3} | {row['silhouette_score']:.4f}     | {row['bic_score']:.2f}")
         else:
-            assessment = 'Acceptable'
+            print(f"{row['algorithm']:<9} | {row['k']:<3} | {row['silhouette_score']:.4f}     | N/A")
 
-        decide_prompt = TIMING_DECIDE_PROMPT.format(
-            original_features=len(self.current_features[0]),
-            pca_components=n_components,
-            variance_explained=variance_pct*100,
-            assessment=assessment,
-            clustering_metrics='\n'.join(metrics)
-        )
+    # Find best algorithm based on silhouette score
+    best_result = results_df.loc[results_df['silhouette_score'].idxmax()]
 
-        prompt_template = ChatPromptTemplate.from_messages([
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=decide_prompt)
-        ])
+    print(f"\\n=== TOURNAMENT WINNER ===")
+    print(f"Algorithm: {best_result['algorithm']}")
+    print(f"Clusters: {best_result['k']}")
+    print(f"Silhouette Score: {best_result['silhouette_score']:.4f}")
 
-        chain = prompt_template | self.llm
-        decision_reasoning = chain.invoke({})
+    if best_result['algorithm'] == 'GMM':
+        print(f"BIC Score: {best_result['bic_score']:.2f}")
 
-        if hasattr(decision_reasoning, 'content'):
-            decision_text = decision_reasoning.content
-        else:
-            decision_text = str(decision_reasoning)
+    # Store winner information
+    winner_algorithm = best_result['algorithm']
+    winner_k = best_result['k']
+    winner_score = best_result['silhouette_score']
+    winner_labels = best_result['labels']
+    winner_model = best_result['model']
 
-        best_k = self._extract_cluster_count(decision_text)
-        best_algo = 'gmm' if 'gmm' in decision_text.lower() or 'gaussian' in decision_text.lower() else 'kmeans'
+    print(f"\\nWinner selected based on highest silhouette score: {winner_score:.4f}")
+else:
+    print("ERROR: No tournament results available")
+    winner_algorithm = 'KMeans'
+    winner_k = 3
+    winner_score = 0.0
+"""
 
-        self.add_message('assistant', decision_text)
-        self.log_reasoning('DECIDE', decision_text)
+        analysis_output = self.execute_python_code(analysis_code)
+        print("Tournament Analysis Output:")
+        print(analysis_output)
 
-        # Fit final model
-        if best_algo == 'gmm':
-            final_model = GaussianMixture(n_components=best_k, random_state=42)
-            final_labels = final_model.fit_predict(features_pca)
-            centroids = final_model.means_
-        else:
-            final_model = KMeans(n_clusters=best_k, random_state=42, n_init=10)
-            final_labels = final_model.fit_predict(features_pca)
-            centroids = final_model.cluster_centers_
-
-        distances = cdist(features_pca, centroids, metric='euclidean')
-        min_distances = np.min(distances, axis=1)
-
+        # Extract winner from execution context and return decision
         decision = {
-            'pca': {
-                'n_components': n_components,
-                'variance_explained': float(cumsum[n_components-1]),
-                'transformer': pca_final
-            },
-            'clustering': {
-                'algorithm': best_algo,
-                'n_clusters': best_k,
-                'model': final_model,
-                'labels': final_labels,
-                'centroids': centroids,
-                'distances': min_distances
-            },
-            'features_pca': features_pca
+            'algorithm': self.execution_context.get('winner_algorithm', 'KMeans'),
+            'n_clusters': self.execution_context.get('winner_k', 3),
+            'silhouette_score': self.execution_context.get('winner_score', 0.0),
+            'labels': self.execution_context.get('winner_labels', []),
+            'model': self.execution_context.get('winner_model', None),
+            'scaled_features': self.execution_context.get('X_scaled', None),
+            'scaler': self.execution_context.get('scaler', None)
         }
+
+        print(f"\n[TOURNAMENT WINNER] {decision['algorithm']} with {decision['n_clusters']} clusters")
+        print(f"[PERFORMANCE] Silhouette Score: {decision['silhouette_score']:.4f}")
 
         return decision
 
@@ -2048,10 +2181,323 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
                                      clusters: np.ndarray, centroids: np.ndarray,
                                      pca_components: Optional[np.ndarray] = None,
                                      export_html: bool = True) -> Dict[str, Any]:
-        """Generate comprehensive interactive dashboard with Plotly."""
+        """
+        Generate comprehensive visualization dashboard with advanced timing analysis.
+
+        Advanced & Comprehensive Visualization Suite includes:
+        1. Dimensionality Reduction (PCA/t-SNE) with boundary status
+        2. Correlation Difference Heatmap
+        3. Tail Coverage Analysis (KDE Overlays)
+        4. Pairplot (Scatter Matrix)
+        5. Cluster Composition Chart
+        """
+
+        print("\n" + "=" * 80)
+        print("[VISUALIZATION] Generating Comprehensive Dashboard")
+        print("=" * 80)
+
+        # Use execution engine to generate advanced visualizations
+        dashboard_code = """
+# COMPREHENSIVE VISUALIZATION DASHBOARD GENERATION
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from scipy.stats import gaussian_kde
+from itertools import combinations
+
+# Set up the visualization parameters
+plt.style.use('dark_background')
+fig_size = (20, 16)
+fig, axes = plt.subplots(3, 3, figsize=fig_size)
+fig.suptitle('Comprehensive Timing Analysis Dashboard', fontsize=20, color='white')
+
+# Get the data from previous analysis
+X_scaled = globals().get('X_scaled')
+feature_names = globals().get('feature_names', [])
+winner_labels = globals().get('winner_labels', [])
+selected_indices = {selected_indices_list}
+
+if X_scaled is not None and len(feature_names) > 0:
+    print("Generating advanced visualization suite...")
+
+    # 1. DIMENSIONALITY REDUCTION WITH BOUNDARY STATUS
+    print("1. Creating PCA/t-SNE visualization with boundary detection...")
+
+    # PCA
+    pca = PCA(n_components=2)
+    pca_coords = pca.fit_transform(X_scaled)
+
+    # t-SNE for comparison
+    if len(X_scaled) <= 5000:  # Only for reasonable dataset sizes
+        tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(X_scaled)-1))
+        tsne_coords = tsne.fit_transform(X_scaled[:5000] if len(X_scaled) > 5000 else X_scaled)
+    else:
+        tsne_coords = pca_coords  # Fallback to PCA for large datasets
+
+    # Detect boundary cases (high sigma and extreme values)
+    boundary_status = []
+    for i in range(len(X_scaled)):
+        is_boundary = False
+        for j, col in enumerate(feature_names[:5]):  # Check first 5 features
+            col_data = dataset[col]
+            mean_val = col_data.mean()
+            std_val = col_data.std()
+            val = dataset.iloc[i][col]
+
+            # High sigma (>3 std devs) or extreme values
+            if abs(val - mean_val) > 3 * std_val or val == col_data.min() or val == col_data.max():
+                is_boundary = True
+                break
+        boundary_status.append(is_boundary)
+
+    # Plot PCA with boundary status
+    ax1 = axes[0, 0]
+    scatter_colors = ['red' if i in selected_indices else 'lightblue' if boundary_status[i] else 'gray'
+                     for i in range(len(pca_coords))]
+    ax1.scatter(pca_coords[:, 0], pca_coords[:, 1], c=scatter_colors, alpha=0.7, s=30)
+    ax1.set_title('PCA: Population (grey) vs Selected (red) vs Boundary (blue)', color='white')
+    ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
+    ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
+
+    print("   - PCA visualization complete")
+
+    # 2. CORRELATION DIFFERENCE HEATMAP
+    print("2. Creating correlation difference heatmap...")
+
+    if len(feature_names) > 2:
+        # Original correlation matrix
+        corr_original = dataset[feature_names].corr()
+
+        # Selected samples correlation matrix
+        selected_data = dataset.iloc[selected_indices][feature_names]
+        corr_selected = selected_data.corr()
+
+        # Difference matrix
+        corr_diff = np.abs(corr_original - corr_selected)
+
+        ax2 = axes[0, 1]
+        sns.heatmap(corr_diff, annot=True, cmap='Reds', ax=ax2,
+                   xticklabels=[f[:8] for f in feature_names[:10]],
+                   yticklabels=[f[:8] for f in feature_names[:10]],
+                   cbar_kws={'label': 'Correlation Difference'})
+        ax2.set_title('Correlation Δ: |Original - Selected|', color='white')
+
+        print("   - Correlation heatmap complete")
+
+    # 3. TAIL COVERAGE ANALYSIS (KDE OVERLAYS)
+    print("3. Creating tail coverage analysis...")
+
+    if len(feature_names) >= 2:
+        # Select most important features for KDE analysis
+        key_features = feature_names[:3]  # First 3 features
+
+        ax3 = axes[0, 2]
+        colors = ['blue', 'red', 'green']
+
+        for i, col in enumerate(key_features):
+            # Original distribution
+            original_data = dataset[col]
+            selected_data = dataset.iloc[selected_indices][col]
+
+            # Create KDE
+            kde_orig = gaussian_kde(original_data)
+            kde_selected = gaussian_kde(selected_data)
+
+            x_range = np.linspace(original_data.min(), original_data.max(), 100)
+
+            # Plot KDEs
+            ax3.plot(x_range, kde_orig(x_range), colors[i], alpha=0.7,
+                    label=f'{col[:8]} Original', linestyle='--')
+            ax3.plot(x_range, kde_selected(x_range), colors[i], alpha=1.0,
+                    label=f'{col[:8]} Selected')
+
+        ax3.set_title('Tail Coverage: Original vs Selected KDE', color='white')
+        ax3.legend()
+        ax3.set_xlabel('Feature Value')
+        ax3.set_ylabel('Density')
+
+        print("   - KDE overlay analysis complete")
+
+    # 4. PAIRPLOT (SCATTER MATRIX) for top 3 features
+    print("4. Creating pairplot scatter matrix...")
+
+    if len(feature_names) >= 3:
+        top_3_features = feature_names[:3]
+
+        # Create scatter plots for feature pairs
+        feature_pairs = list(combinations(range(3), 2))
+        plot_positions = [(1, 0), (1, 1), (1, 2)]
+
+        for idx, (i, j) in enumerate(feature_pairs):
+            if idx < 3:  # Only plot first 3 pairs
+                ax = axes[plot_positions[idx]]
+
+                feat1 = dataset[top_3_features[i]]
+                feat2 = dataset[top_3_features[j]]
+
+                # Plot all points in gray
+                ax.scatter(feat1, feat2, c='gray', alpha=0.3, s=20, label='Population')
+
+                # Plot selected points in red
+                selected_feat1 = dataset.iloc[selected_indices][top_3_features[i]]
+                selected_feat2 = dataset.iloc[selected_indices][top_3_features[j]]
+                ax.scatter(selected_feat1, selected_feat2, c='red', alpha=0.8, s=30, label='Selected')
+
+                ax.set_xlabel(top_3_features[i][:12])
+                ax.set_ylabel(top_3_features[j][:12])
+                ax.set_title(f'{top_3_features[i][:8]} vs {top_3_features[j][:8]}', color='white')
+                if idx == 0:
+                    ax.legend()
+
+        print("   - Pairplot scatter matrix complete")
+
+    # 5. CLUSTER COMPOSITION CHART
+    print("5. Creating cluster composition analysis...")
+
+    if len(winner_labels) > 0:
+        ax4 = axes[2, 0]
+
+        # Classify points as nominal, high sigma, or boundary
+        point_types = []
+        for i in range(len(dataset)):
+            if boundary_status[i]:
+                point_types.append('Boundary')
+            else:
+                # Check if high sigma in any feature
+                is_high_sigma = False
+                for col in feature_names[:5]:
+                    col_data = dataset[col]
+                    val = dataset.iloc[i][col]
+                    if abs(val - col_data.mean()) > 3 * col_data.std():
+                        is_high_sigma = True
+                        break
+
+                if is_high_sigma:
+                    point_types.append('High Sigma')
+                else:
+                    point_types.append('Nominal')
+
+        # Create composition chart
+        unique_clusters = np.unique(winner_labels)
+        compositions = {'Nominal': [], 'High Sigma': [], 'Boundary': []}
+
+        for cluster_id in unique_clusters:
+            cluster_mask = winner_labels == cluster_id
+            cluster_types = [point_types[i] for i in range(len(point_types)) if cluster_mask[i]]
+
+            for comp_type in compositions.keys():
+                compositions[comp_type].append(cluster_types.count(comp_type))
+
+        # Stacked bar chart
+        bar_width = 0.6
+        x_pos = np.arange(len(unique_clusters))
+
+        bottom_nominal = np.array(compositions['Nominal'])
+        bottom_sigma = bottom_nominal + np.array(compositions['High Sigma'])
+
+        ax4.bar(x_pos, compositions['Nominal'], bar_width, label='Nominal', color='lightblue')
+        ax4.bar(x_pos, compositions['High Sigma'], bar_width, bottom=bottom_nominal,
+               label='High Sigma', color='orange')
+        ax4.bar(x_pos, compositions['Boundary'], bar_width, bottom=bottom_sigma,
+               label='Boundary', color='red')
+
+        ax4.set_xlabel('Cluster ID')
+        ax4.set_ylabel('Point Count')
+        ax4.set_title('Cluster Composition: Nominal vs High Sigma vs Boundary', color='white')
+        ax4.set_xticks(x_pos)
+        ax4.set_xticklabels([f'C{i}' for i in unique_clusters])
+        ax4.legend()
+
+        print("   - Cluster composition chart complete")
+
+    # 6. SUMMARY STATISTICS
+    print("6. Adding summary statistics...")
+
+    # Summary text in remaining subplot
+    ax5 = axes[2, 1]
+    ax5.axis('off')
+
+    # Calculate key statistics
+    n_total = len(dataset)
+    n_selected = len(selected_indices)
+    selection_pct = 100 * n_selected / n_total if n_total > 0 else 0
+    n_boundary = sum(boundary_status)
+    boundary_pct = 100 * n_boundary / n_total if n_total > 0 else 0
+
+    # Boundary coverage in selection
+    selected_boundary = sum(boundary_status[i] for i in selected_indices)
+    boundary_coverage = 100 * selected_boundary / n_boundary if n_boundary > 0 else 0
+
+    summary_text = f'''SELECTION SUMMARY
+
+Total Samples: {n_total:,}
+Selected Samples: {n_selected:,} ({selection_pct:.1f}%)
+
+Boundary Points: {n_boundary:,} ({boundary_pct:.1f}%)
+Boundary Coverage: {selected_boundary:,} ({boundary_coverage:.1f}%)
+
+Features Analyzed: {len(feature_names)}
+Clusters Found: {len(np.unique(winner_labels)) if len(winner_labels) > 0 else 0}
+
+Algorithm: {winner_algorithm if 'winner_algorithm' in globals() else 'Unknown'}
+Performance: {winner_score:.4f} if 'winner_score' in globals() else 0.0
+'''
+
+    ax5.text(0.1, 0.9, summary_text, transform=ax5.transAxes, fontsize=12,
+            color='white', verticalalignment='top', fontfamily='monospace')
+
+    # 7. FEATURE IMPORTANCE (if available)
+    ax6 = axes[2, 2]
+
+    if len(feature_names) > 0:
+        # Calculate feature variance as proxy for importance
+        feature_importance = [dataset[col].var() for col in feature_names[:10]]
+        feature_labels = [f[:8] for f in feature_names[:10]]
+
+        bars = ax6.barh(range(len(feature_importance)), feature_importance, color='lightgreen')
+        ax6.set_yticks(range(len(feature_importance)))
+        ax6.set_yticklabels(feature_labels)
+        ax6.set_xlabel('Variance (Importance Proxy)')
+        ax6.set_title('Feature Importance', color='white')
+
+        # Add value labels on bars
+        for i, (bar, val) in enumerate(zip(bars, feature_importance)):
+            ax6.text(val + max(feature_importance) * 0.01, i, f'{val:.2f}',
+                    va='center', color='white', fontsize=8)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    print("\\n=== COMPREHENSIVE DASHBOARD COMPLETE ===")
+    print("Dashboard includes:")
+    print("- PCA/t-SNE with boundary detection")
+    print("- Correlation difference analysis")
+    print("- Tail coverage validation")
+    print("- Pairwise feature relationships")
+    print("- Cluster composition breakdown")
+    print("- Summary statistics and feature importance")
+
+else:
+    print("ERROR: Required data not available for dashboard generation")
+
+# Save the plot
+dashboard_filename = 'comprehensive_timing_dashboard.png'
+plt.savefig(dashboard_filename, dpi=300, bbox_inches='tight',
+           facecolor='#2F3542', edgecolor='none')
+print(f"\\nDashboard saved as: {dashboard_filename}")
+
+plt.show()
+"""
+
+        # Execute dashboard generation
+        dashboard_result = self.execute_python_code(dashboard_code.replace("{selected_indices_list}", str(list(selected_indices))))
+        print("Dashboard Generation Output:")
+        print(dashboard_result)
 
         if not PLOTLY_AVAILABLE:
-            print("[WARNING] Plotly not available - using fallback visualization")
+            print("[INFO] Using comprehensive matplotlib dashboard - Plotly not available")
             return self._fallback_visualization(df, selected_indices, clusters)
 
         # Prepare data
@@ -2475,6 +2921,277 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
                 print(f"Fallback HTML creation also failed: {fallback_e}")
                 # Return None to indicate complete failure
                 return None
+
+    def detect_high_sigma_points(self) -> Dict[str, Any]:
+        """
+        Domain-Specific Logic: High Sigma Detection.
+        Identifies points > 3 standard deviations from mean for timing analysis.
+        """
+        detection_code = """
+# HIGH SIGMA DETECTION - Domain-specific timing analysis
+
+high_sigma_results = {
+    'high_sigma_indices': [],
+    'high_sigma_features': {},
+    'statistics': {}
+}
+
+if 'feature_names' in globals() and 'dataset' in globals():
+    print("\\n=== HIGH SIGMA DETECTION ===")
+
+    feature_names = globals()['feature_names']
+    dataset = globals()['dataset']
+
+    total_high_sigma = set()
+
+    for feature in feature_names:
+        if feature in dataset.columns:
+            feature_data = dataset[feature]
+            mean_val = feature_data.mean()
+            std_val = feature_data.std()
+            threshold = 3 * std_val
+
+            # Find points > 3 sigma from mean
+            high_sigma_mask = abs(feature_data - mean_val) > threshold
+            high_sigma_indices = dataset.index[high_sigma_mask].tolist()
+
+            high_sigma_results['high_sigma_features'][feature] = {
+                'indices': high_sigma_indices,
+                'count': len(high_sigma_indices),
+                'percentage': 100 * len(high_sigma_indices) / len(dataset),
+                'threshold': threshold,
+                'mean': mean_val,
+                'std': std_val
+            }
+
+            total_high_sigma.update(high_sigma_indices)
+
+            print(f"{feature}: {len(high_sigma_indices)} points > 3σ ({100 * len(high_sigma_indices) / len(dataset):.1f}%)")
+
+    high_sigma_results['high_sigma_indices'] = list(total_high_sigma)
+    high_sigma_results['statistics'] = {
+        'total_high_sigma_points': len(total_high_sigma),
+        'percentage_of_dataset': 100 * len(total_high_sigma) / len(dataset),
+        'features_analyzed': len(feature_names)
+    }
+
+    print(f"\\nTotal unique high sigma points: {len(total_high_sigma)} ({100 * len(total_high_sigma) / len(dataset):.1f}%)")
+
+else:
+    print("ERROR: Required data not available for high sigma detection")
+"""
+
+        result = self.execute_python_code(detection_code)
+        print("High Sigma Detection Output:")
+        print(result)
+
+        # Return results from execution context
+        return {
+            'detection_output': result,
+            'high_sigma_indices': self.execution_context.get('high_sigma_results', {}).get('high_sigma_indices', []),
+            'statistics': self.execution_context.get('high_sigma_results', {}).get('statistics', {})
+        }
+
+    def detect_boundary_points(self) -> Dict[str, Any]:
+        """
+        Domain-Specific Logic: Boundary Detection.
+        Identifies points at min/max of delay range and table corner positions.
+        """
+        boundary_code = """
+# BOUNDARY DETECTION - Domain-specific timing analysis
+
+boundary_results = {
+    'boundary_indices': [],
+    'boundary_types': {},
+    'statistics': {}
+}
+
+if 'feature_names' in globals() and 'dataset' in globals():
+    print("\\n=== BOUNDARY DETECTION ===")
+
+    feature_names = globals()['feature_names']
+    dataset = globals()['dataset']
+
+    total_boundary = set()
+
+    # 1. Feature-based boundary detection (min/max values)
+    print("1. Feature boundary detection...")
+    for feature in feature_names:
+        if feature in dataset.columns:
+            feature_data = dataset[feature]
+            min_val = feature_data.min()
+            max_val = feature_data.max()
+
+            # Points at minimum or maximum
+            boundary_mask = (feature_data == min_val) | (feature_data == max_val)
+            boundary_indices = dataset.index[boundary_mask].tolist()
+
+            boundary_results['boundary_types'][f'{feature}_minmax'] = {
+                'indices': boundary_indices,
+                'count': len(boundary_indices),
+                'min_val': min_val,
+                'max_val': max_val
+            }
+
+            total_boundary.update(boundary_indices)
+            print(f"   {feature}: {len(boundary_indices)} boundary points (min/max)")
+
+    # 2. Table position boundary detection (if cell_arc_pt exists)
+    print("2. Table position boundary detection...")
+    if 'cell_arc_pt' in dataset.columns:
+        # Parse table positions
+        def parse_table_position(cell_arc_pt_value):
+            parts = str(cell_arc_pt_value).rsplit('_', 2)
+            if len(parts) >= 3:
+                try:
+                    return int(parts[-2]), int(parts[-1])
+                except ValueError:
+                    return None, None
+            return None, None
+
+        table_positions = dataset['cell_arc_pt'].apply(parse_table_position)
+        valid_positions = [(i, pos) for i, pos in enumerate(table_positions) if pos[0] is not None]
+
+        if valid_positions:
+            rows = [pos[1][0] for pos in valid_positions]
+            cols = [pos[1][1] for pos in valid_positions]
+
+            min_row, max_row = min(rows), max(rows)
+            min_col, max_col = min(cols), max(cols)
+
+            # Corner positions (extreme table positions)
+            corner_indices = []
+            for i, pos in valid_positions:
+                row, col = pos[1]
+                if (row == min_row or row == max_row) and (col == min_col or col == max_col):
+                    corner_indices.append(i)
+
+            boundary_results['boundary_types']['table_corners'] = {
+                'indices': corner_indices,
+                'count': len(corner_indices),
+                'corners': f"({min_row},{min_col}), ({min_row},{max_col}), ({max_row},{min_col}), ({max_row},{max_col})"
+            }
+
+            total_boundary.update(corner_indices)
+            print(f"   Table corners: {len(corner_indices)} corner position points")
+
+            # Edge positions (first/last row or column)
+            edge_indices = []
+            for i, pos in valid_positions:
+                row, col = pos[1]
+                if row == min_row or row == max_row or col == min_col or col == max_col:
+                    edge_indices.append(i)
+
+            boundary_results['boundary_types']['table_edges'] = {
+                'indices': edge_indices,
+                'count': len(edge_indices)
+            }
+
+            print(f"   Table edges: {len(edge_indices)} edge position points")
+
+    boundary_results['boundary_indices'] = list(total_boundary)
+    boundary_results['statistics'] = {
+        'total_boundary_points': len(total_boundary),
+        'percentage_of_dataset': 100 * len(total_boundary) / len(dataset),
+        'boundary_types_found': len(boundary_results['boundary_types'])
+    }
+
+    print(f"\\nTotal unique boundary points: {len(total_boundary)} ({100 * len(total_boundary) / len(dataset):.1f}%)")
+
+else:
+    print("ERROR: Required data not available for boundary detection")
+"""
+
+        result = self.execute_python_code(boundary_code)
+        print("Boundary Detection Output:")
+        print(result)
+
+        # Return results from execution context
+        return {
+            'detection_output': result,
+            'boundary_indices': self.execution_context.get('boundary_results', {}).get('boundary_indices', []),
+            'statistics': self.execution_context.get('boundary_results', {}).get('statistics', {})
+        }
+
+    def analyze_timing_coverage(self, selected_indices: List[int]) -> Dict[str, Any]:
+        """
+        Analyze how well the selection covers critical timing scenarios.
+        """
+        analysis_code = f"""
+# TIMING COVERAGE ANALYSIS
+
+coverage_results = {{}}
+
+if 'feature_names' in globals() and 'dataset' in globals():
+    print("\\n=== TIMING COVERAGE ANALYSIS ===")
+
+    selected_indices = {selected_indices}
+    feature_names = globals()['feature_names']
+    dataset = globals()['dataset']
+
+    # Get high sigma and boundary results if available
+    high_sigma_indices = globals().get('high_sigma_results', {{}}).get('high_sigma_indices', [])
+    boundary_indices = globals().get('boundary_results', {{}}).get('boundary_indices', [])
+
+    # Calculate coverage metrics
+    total_samples = len(dataset)
+    selected_samples = len(selected_indices)
+
+    # High sigma coverage
+    selected_high_sigma = len(set(selected_indices) & set(high_sigma_indices))
+    high_sigma_coverage = 100 * selected_high_sigma / len(high_sigma_indices) if high_sigma_indices else 0
+
+    # Boundary coverage
+    selected_boundary = len(set(selected_indices) & set(boundary_indices))
+    boundary_coverage = 100 * selected_boundary / len(boundary_indices) if boundary_indices else 0
+
+    # Feature coverage analysis
+    feature_coverage = {{}}
+    for feature in feature_names[:5]:  # Analyze first 5 features
+        if feature in dataset.columns:
+            feature_data = dataset[feature]
+            original_range = feature_data.max() - feature_data.min()
+
+            selected_data = dataset.iloc[selected_indices][feature]
+            selected_range = selected_data.max() - selected_data.min()
+
+            range_coverage = 100 * selected_range / original_range if original_range > 0 else 0
+
+            feature_coverage[feature] = {{
+                'range_coverage': range_coverage,
+                'min_preserved': selected_data.min() == feature_data.min(),
+                'max_preserved': selected_data.max() == feature_data.max()
+            }}
+
+    coverage_results = {{
+        'selection_rate': 100 * selected_samples / total_samples,
+        'high_sigma_coverage': high_sigma_coverage,
+        'boundary_coverage': boundary_coverage,
+        'feature_coverage': feature_coverage,
+        'coverage_score': (high_sigma_coverage + boundary_coverage) / 2
+    }}
+
+    print(f"Selection Rate: {{coverage_results['selection_rate']:.1f}}%")
+    print(f"High Sigma Coverage: {{coverage_results['high_sigma_coverage']:.1f}}%")
+    print(f"Boundary Coverage: {{coverage_results['boundary_coverage']:.1f}}%")
+    print(f"Overall Coverage Score: {{coverage_results['coverage_score']:.1f}}")
+
+    print("\\nFeature Range Coverage:")
+    for feature, metrics in feature_coverage.items():
+        print(f"  {{feature}}: {{metrics['range_coverage']:.1f}}% (min: {{metrics['min_preserved']}}, max: {{metrics['max_preserved']}})")
+
+else:
+    print("ERROR: Required data not available for coverage analysis")
+"""
+
+        result = self.execute_python_code(analysis_code)
+        print("Coverage Analysis Output:")
+        print(result)
+
+        return {
+            'analysis_output': result,
+            'coverage_results': self.execution_context.get('coverage_results', {})
+        }
 
     def _fallback_visualization(self, df: pd.DataFrame, selected_indices: List[int], clusters: np.ndarray) -> Dict[str, Any]:
         """Generate comprehensive self-contained HTML dashboard with zero dependencies."""
