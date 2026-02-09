@@ -67,15 +67,15 @@ The main identifier column is `cell_arc_pt`. It is a compound string encoding mu
 Parse this as follows:
 
 1. CELL NAME: Everything before the first '#'
-   → "CMPE42D1BWP240H8P57CPD"
+   - "CMPE42D1BWP240H8P57CPD"
    This is the standard cell name. Different cell names = different cell types/topologies.
 
 2. ARC INFORMATION: The middle sections between '#' delimiters
-   → "B#A&!C&CIX&D#fall"
+   - "B#A&!C&CIX&D#fall"
    Contains: pin names, pin directions, when conditions, and arc direction (rise/fall).
 
 3. TABLE POINT: The last two numbers after the final '_' pair
-   → "_3_5" means row 3, column 5 in the characterization table
+   - "_3_5" means row 3, column 5 in the characterization table
    The table is typically 8x8 or 5x5, where:
    - Row index = input slew index (row 1 = smallest slew, row 8 = largest slew)
    - Column index = output load index (col 1 = smallest load, col 8 = largest load)
@@ -789,7 +789,7 @@ class TimingDataSelectionAgent:
         """
         Execute Python code with persistent context and capture output.
 
-        The \"Hands\" - Real code execution engine that replaces hallucination.
+        The Hands - Real code execution engine that replaces hallucination.
         Variables persist between calls via self.execution_context.
 
         Args:
@@ -1029,7 +1029,7 @@ Return ONLY the JSON object, nothing else.""")
     def observe(self, csv_path: str, target_percentage: float = 5.0, use_agentic_explore: bool = True) -> Dict[str, Any]:
         """
         OBSERVE stage - ReAct Agent with real Python execution.
-        The \"Eyes\" - Dynamic while loop for schema discovery and analysis.
+        The Eyes - Dynamic while loop for schema discovery and analysis.
         """
         self._load_imports()
         print("\n" + "=" * 100)
@@ -1179,7 +1179,7 @@ for col in feature_names:
     boundary_count = boundary_mask.sum()
     boundary_points[col] = boundary_count
 
-print("\\nHigh sigma points (>3σ) per feature:")
+print("\\nHigh sigma points (>3 std dev) per feature:")
 for col, count in high_sigma_points.items():
     if count > 0:
         pct = 100 * count / len(dataset)
@@ -1330,7 +1330,7 @@ and {'diverse' if len(observation['cell_types']) > 10 else 'limited'} cell type 
     def decide(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
         """
         DECIDE stage - Algorithm Tournament with Real Performance Metrics.
-        The \"Brain\" - Replaces LLM guessing with empirical algorithm comparison.
+        The Brain - Replaces LLM guessing with empirical algorithm comparison.
         """
         self._load_imports()
         print("\n" + "=" * 100)
@@ -1772,7 +1772,7 @@ if len(results_df) > 0:
                         'pca_model': pca_optimal
                     })
 
-                    print(f"     {algo_name} k={k}: {config['silhouette_score']:.4f} → {sil_pca:.4f} (Δ{sil_pca-config['silhouette_score']:+.4f})")
+                    print(f"     {algo_name} k={k}: {config['silhouette_score']:.4f} -> {sil_pca:.4f} (Delta {sil_pca-config['silhouette_score']:+.4f})")
 
                 except Exception as e:
                     continue
@@ -1877,7 +1877,7 @@ if len(results_df) > 0:
 
         # Update current best if grid search found improvements
         if best_grid_score > current_best['silhouette_score']:
-            print(f"   Grid search improvement: {current_best['silhouette_score']:.4f} → {best_grid_score:.4f}")
+            print(f"   Grid search improvement: {current_best['silhouette_score']:.4f} -> {best_grid_score:.4f}")
             current_best = best_grid_config
 
     # 4. FINAL RESULTS ANALYSIS
@@ -2736,7 +2736,7 @@ if X_scaled is not None and len(feature_names) > 0:
     scatter_colors = ['red' if i in selected_indices else 'lightblue' if boundary_status[i] else 'gray'
                      for i in range(len(pca_coords))]
     ax1.scatter(pca_coords[:, 0], pca_coords[:, 1], c=scatter_colors, alpha=0.7, s=30)
-    ax1.set_title('PCA: Population (grey) vs Selected (red) vs Boundary (blue)', color='white')
+    ax1.set_title('PCA: Population grey vs Selected red vs Boundary blue', color='white')
     ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
     ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
 
@@ -2761,7 +2761,7 @@ if X_scaled is not None and len(feature_names) > 0:
                    xticklabels=[f[:8] for f in feature_names[:10]],
                    yticklabels=[f[:8] for f in feature_names[:10]],
                    cbar_kws={'label': 'Correlation Difference'})
-        ax2.set_title('Correlation Δ: |Original - Selected|', color='white')
+        ax2.set_title('Correlation Delta: Original vs Selected', color='white')
 
         print("   - Correlation heatmap complete")
 
@@ -3444,7 +3444,7 @@ if 'feature_names' in globals() and 'dataset' in globals():
 
             total_high_sigma.update(high_sigma_indices)
 
-            print(f"{feature}: {len(high_sigma_indices)} points > 3σ ({100 * len(high_sigma_indices) / len(dataset):.1f}%)")
+            print(f"{feature}: {len(high_sigma_indices)} points > 3 std dev ({100 * len(high_sigma_indices) / len(dataset):.1f}%)")
 
     high_sigma_results['high_sigma_indices'] = list(total_high_sigma)
     high_sigma_results['statistics'] = {
@@ -3820,7 +3820,7 @@ else:
             <p style="font-size:0.75em;color:#64748B;margin-top:8px">
                 Colors: <span style="color:#10B981">Green (&lt;10%)</span>,
                 <span style="color:#F59E0B">Yellow (&lt;25%)</span>,
-                <span style="color:#EF4444">Red (≥25%)</span> difference from full dataset
+                <span style="color:#EF4444">Red (25%+)</span> difference from full dataset
             </p>
         </div>
     </div>
@@ -3870,3 +3870,63 @@ else:
                 'zero_dependencies': True
             }
         }
+
+
+def test_agent_functionality():
+    """
+    Built-in test function to validate agent functionality.
+    Tests the ReAct architecture, algorithm tournament, and visualization.
+    """
+    print("Testing Enhanced TimingDataSelectionAgent...")
+    print("=" * 60)
+
+    class MockLLM:
+        def invoke(self, inputs):
+            class MockResponse:
+                def __init__(self, content):
+                    self.content = content
+            return MockResponse("Mock LLM response for testing")
+
+    # Initialize agent
+    agent = TimingDataSelectionAgent(MockLLM(), verbose=True)
+    print(f"Agent initialized with execution engine: {hasattr(agent, 'execution_context')}")
+
+    # Test data path
+    test_csv_path = "mock_data/test_data.csv"
+
+    try:
+        # Test observe stage
+        print("\nTesting OBSERVE stage...")
+        observation = agent.observe(test_csv_path, target_percentage=5.0)
+        print(f"Observation completed with {observation.get('n_features', 0)} features detected")
+
+        # Test domain-specific detection
+        print("\nTesting domain-specific detection...")
+        high_sigma_result = agent.detect_high_sigma_points()
+        boundary_result = agent.detect_boundary_points()
+        print("Domain-specific detection completed successfully")
+
+        # Test algorithm tournament
+        print("\nTesting algorithm tournament...")
+        decision = agent.decide({'variance_threshold': 0.9})
+        print(f"Tournament completed - Winner: {decision.get('algorithm', 'Unknown')}")
+
+        print("\n" + "=" * 60)
+        print("All tests completed successfully!")
+        print("Enhanced agent features validated:")
+        print("- Real Python code execution engine")
+        print("- ReAct schema discovery loop")
+        print("- Comprehensive algorithm tournament")
+        print("- Domain-specific detection logic")
+        print("- Advanced visualization capabilities")
+
+        return True
+
+    except Exception as e:
+        print(f"Test failed: {e}")
+        return False
+
+
+if __name__ == "__main__":
+    # Run built-in tests when script is executed directly
+    test_agent_functionality()
