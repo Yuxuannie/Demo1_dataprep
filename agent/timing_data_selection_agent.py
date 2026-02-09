@@ -2390,12 +2390,9 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
             selection_percentage = summary.get('selection_percentage', 0.0)
             num_clusters = summary.get('num_clusters', 0)
 
-            # Create safe filename
+            # Create safe filename in current working directory
             html_filename = f"timing_dashboard_{selected_count}samples_{timestamp}.html"
-            html_path = os.path.join(tempfile.gettempdir(), html_filename)
-
-            # Ensure the temp directory exists
-            os.makedirs(os.path.dirname(html_path), exist_ok=True)
+            html_path = os.path.join(os.getcwd(), html_filename)
 
             # Add summary annotation
             fig.add_annotation(
@@ -2433,6 +2430,16 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
             )
 
             print(f"Interactive dashboard exported successfully: {html_path}")
+
+            # Automatically open the dashboard in the default browser
+            try:
+                import webbrowser
+                webbrowser.open(f'file://{html_path}')
+                print(f"[OK] Dashboard opened in browser automatically")
+            except Exception as open_error:
+                print(f"[INFO] Dashboard saved but could not auto-open browser: {open_error}")
+                print(f"[INFO] Please manually open: {html_path}")
+
             return html_path
 
         except Exception as e:
@@ -2441,7 +2448,7 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
 
             # Try to create a fallback basic HTML export
             try:
-                fallback_path = os.path.join(tempfile.gettempdir(), f"timing_dashboard_fallback_{timestamp}.html")
+                fallback_path = os.path.join(os.getcwd(), f"timing_dashboard_fallback_{timestamp}.html")
                 with open(fallback_path, 'w') as f:
                     f.write(f"""
                     <html><head><title>Timing Dashboard</title></head>
@@ -2454,6 +2461,15 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
                     </body></html>
                     """)
                 print(f"Fallback HTML report created: {fallback_path}")
+
+                # Auto-open fallback dashboard
+                try:
+                    import webbrowser
+                    webbrowser.open(f'file://{fallback_path}')
+                    print(f"[OK] Fallback dashboard opened in browser automatically")
+                except Exception as open_error:
+                    print(f"[INFO] Fallback dashboard saved but could not auto-open: {open_error}")
+
                 return fallback_path
             except Exception as fallback_e:
                 print(f"Fallback HTML creation also failed: {fallback_e}")
@@ -2619,15 +2635,25 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
 </body>
 </html>'''
 
-        # Export HTML dashboard
+        # Export HTML dashboard to current working directory
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         html_filename = f"aiqc_dashboard_{n_selected}samples_{timestamp}.html"
-        html_path = os.path.join(tempfile.gettempdir(), html_filename)
+        html_path = os.path.join(os.getcwd(), html_filename)
 
         try:
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(html)
             print(f"[OK] Self-contained dashboard exported: {html_path} ({len(html)} bytes)")
+
+            # Automatically open the dashboard in the default browser
+            try:
+                import webbrowser
+                webbrowser.open(f'file://{html_path}')
+                print(f"[OK] Dashboard opened in browser automatically")
+            except Exception as open_error:
+                print(f"[INFO] Dashboard saved but could not auto-open browser: {open_error}")
+                print(f"[INFO] Please manually open: {html_path}")
+
         except Exception as e:
             print(f"Failed to export HTML dashboard: {e}")
             html_path = None
