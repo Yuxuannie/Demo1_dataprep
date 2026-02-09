@@ -1068,7 +1068,7 @@ Return ONLY the JSON object, nothing else.""")
                         print(f"ERROR: Table position parsing failed - max row/col {max_row}/{max_col} > 8")
                         print("This indicates the parsing regex is matching wrong digit groups!")
                     else:
-                        print("✓ Table position parsing validated: all values in expected range")
+                        print("[OK] Table position parsing validated: all values in expected range")
 
                     # Add boundary case identification
                     table_size = max(max_row, max_col)
@@ -2609,7 +2609,7 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
         try:
             with open(html_path, 'w') as f:
                 f.write(html)
-            print(f"✓ Self-contained dashboard exported: {html_path} ({len(html)} bytes)")
+            print(f"[OK] Self-contained dashboard exported: {html_path} ({len(html)} bytes)")
         except Exception as e:
             print(f"Failed to export HTML dashboard: {e}")
             html_path = None
