@@ -7,6 +7,8 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from enum import Enum
 import json
 import re
+import time
+import tempfile
 import numpy as np
 import pandas as pd
 import os
@@ -46,6 +48,125 @@ class UserIntent(Enum):
 # MULTI-STAGE AGENTIC PROMPTS (Enhanced from Original System)
 TIMING_SYSTEM_PROMPT = """You are a Senior Semiconductor Timing Engineer with deep expertise in library characterization and ML model training for timing analysis.
 
+## MANDATORY FIRST STEP: Schema Discovery
+
+Before ANY analysis, you MUST run this exact sequence:
+
+1. Print all column names: `print(dataset.columns.tolist())`
+2. Print first 3 rows: `print(dataset.head(3))`
+3. Print dtypes: `print(dataset.dtypes)`
+
+Read the output carefully. ONLY reference columns that actually exist in the output of step 1.
+
+CRITICAL RULES:
+- NEVER access a column name you haven't seen in the schema discovery output
+- NEVER assume columns like 'cell_type', 'pvt_corner', 'slew', 'load', 'arc_type' exist as separate columns
+- If you need information that isn't a direct column (e.g., cell names, table positions), you must PARSE it from the columns that DO exist
+- If a column access fails or returns unexpected results, STOP and re-examine the schema
+
+## Input Data Format: cell_arc_pt Column
+
+The main identifier column is `cell_arc_pt`. It is a compound string encoding multiple pieces of information. Example:
+
+    CMPE42D1BWP240H8P57CPD#B#A&!C&CIX&D#fall_3_5
+
+Parse this as follows:
+
+1. CELL NAME: Everything before the first '#'
+   → "CMPE42D1BWP240H8P57CPD"
+   This is the standard cell name. Different cell names = different cell types/topologies.
+
+2. ARC INFORMATION: The middle sections between '#' delimiters
+   → "B#A&!C&CIX&D#fall"
+   Contains: pin names, pin directions, when conditions, and arc direction (rise/fall).
+
+3. TABLE POINT: The last two numbers after the final '_' pair
+   → "_3_5" means row 3, column 5 in the characterization table
+   The table is typically 8x8 or 5x5, where:
+   - Row index = input slew index (row 1 = smallest slew, row 8 = largest slew)
+   - Column index = output load index (col 1 = smallest load, col 8 = largest load)
+   - Corner positions (1_1, 1_8, 8_1, 8_8) represent EXTREME slew/load combinations — these are boundary cases
+   - Center positions (4_4, 4_5, 5_4, 5_5) represent typical operating conditions
+
+To extract these components, use parsing like:
+```python
+# Extract cell name
+dataset['cell_name'] = dataset['cell_arc_pt'].str.split('#').str[0]
+
+# Extract table position
+dataset['table_row'] = dataset['cell_arc_pt'].str.extract(r'_(\d+)_\d+$')[0].astype(int)
+dataset['table_col'] = dataset['cell_arc_pt'].str.extract(r'_\d+_(\d+)$')[0].astype(int)
+
+# Extract arc direction (rise/fall)
+dataset['arc_direction'] = dataset['cell_arc_pt'].str.extract(r'#(rise|fall)_\d+_\d+$')[0]
+
+# Determine table size from max indices
+table_size = max(dataset['table_row'].max(), dataset['table_col'].max())
+
+# Identify boundary cases (corner table positions)
+dataset['is_boundary'] = (
+    ((dataset['table_row'] == 1) | (dataset['table_row'] == table_size)) &
+    ((dataset['table_col'] == 1) | (dataset['table_col'] == table_size))
+)
+
+# Identify edge cases (any edge position)
+dataset['is_edge'] = (
+    (dataset['table_row'] == 1) | (dataset['table_row'] == table_size) |
+    (dataset['table_col'] == 1) | (dataset['table_col'] == table_size)
+)
+```
+
+IMPORTANT: The table position IS the slew/load information. There are no separate 'slew' and 'load' columns. Row index maps to input slew, column index maps to output load. Use table positions for boundary case analysis, not assumed slew/load columns.
+
+## Tool Output Integrity
+
+CRITICAL: When you write code to analyze data, the code MUST actually execute and return real results.
+
+Rules:
+- If a column access would raise a KeyError, you MUST catch it and report the error, not fabricate results
+- After every data access, print the actual shape and a sample of results to verify
+- NEVER describe results you haven't actually computed
+- If you're unsure whether a column exists, run `print(col_name in dataset.columns)` first
+
+Add try-except blocks around data access:
+```python
+try:
+    result = dataset['column_name'].value_counts()
+    print(result)
+except KeyError:
+    print(f"ERROR: Column 'column_name' does not exist. Available columns: {dataset.columns.tolist()}")
+    # Fall back to schema discovery
+```
+
+If a tool execution fails, this is VALUABLE INFORMATION — report it honestly. Saying "Column 'cell_type' not found, parsing from cell_arc_pt instead" is a BETTER demo moment than silently fabricating results.
+
+## Sample Allocation: Handle Overlaps
+
+When allocating samples across categories (e.g., high-sigma, boundary, typical):
+1. First, tag each arc with ALL applicable categories (an arc can be both high-sigma AND boundary)
+2. Use prioritized selection: start with arcs that satisfy MULTIPLE criteria (these are highest priority)
+3. Then fill remaining budget with single-criteria arcs
+4. Report the overlap: "X arcs are both high-sigma and boundary — these are selected first as highest priority"
+5. Final count must equal the budget exactly — verify with: `assert len(selected) == target_count`
+
+## Sampling Strategy: Table Position Awareness
+
+When analyzing the dataset, leverage table positions for intelligent sampling:
+
+1. BOUNDARY COVERAGE: Corner positions (1_1, 1_N, N_1, N_N where N=table size) represent extreme operating conditions. These MUST be represented in the sample set — missing boundary cases creates signoff risk.
+
+2. DISTRIBUTION CHECK: Count samples per table position. If certain positions are underrepresented, flag this. A well-characterized library needs coverage across the full table.
+
+3. SLEW/LOAD PROXY: Since table row = slew index and table col = load index:
+   - High row numbers = large input slew (slow transitions)
+   - High col numbers = large output load (heavily loaded outputs)
+   - Position (N, N) = worst-case: large slew + large load = maximum delay
+   - Position (1, 1) = best-case: small slew + small load = minimum delay
+
+4. ARC DIVERSITY: Different cell_name values represent different circuit topologies. Ensure the sample set includes diverse cells, not just the most common one.
+
+5. RISE vs FALL: Parse arc_direction and ensure both rise and fall arcs are represented proportionally.
+
 SEMICONDUCTOR DOMAIN EXPERTISE:
 Apply this timing domain knowledge to ALL decisions:
 
@@ -70,19 +191,15 @@ After every tool call, first print the key numerical results (scores, cluster si
 
 If a tool result surprises you (differs from what you expected), explicitly state: 'Expected [X] but got [Y]. This changes my approach because [reason].'
 
-OUTPUT FORMAT REQUIREMENT:
-ALL responses must follow this two-level structure:
+## Output Structure
 
-### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: [size, features, key stats - 2 lines]
-- Method: [chosen approach + parameters - 1 line]
-- Allocation: [exact sample counts and percentages]
-- Key reasons: [2-3 data-driven reasons with numbers]
-- Confidence: [High/Medium/Low] + [why]
-- Top risk: [single biggest concern]
+Show the SUMMARY exactly once, at the very end after all iterations and allocation are complete.
+Do NOT show intermediate summaries after each iteration — the DECISION block at the end of each iteration is sufficient.
 
-### DETAILED TRACE (below summary)
-[Full iteration logs with ACTION/RESULT/ASSESSMENT/DECISION cycles]
+Structure:
+1. DETAILED TRACE (iterations with ACTION/RESULT/ASSESSMENT/DECISION)
+2. FINAL ALLOCATION (with specific sample counts)
+3. SUMMARY (once, at the very end, 10-15 lines)
 
 ITERATION REQUIREMENT:
 You must complete minimum 2 iterations before finalizing any clustering decision. If silhouette < 0.5 or any cluster has < 1% of total data, you MUST iterate."""
@@ -90,16 +207,47 @@ You must complete minimum 2 iterations before finalizing any clustering decision
 # ==============================================================================
 # STEP 1: AUTONOMOUS DATA EXPLORATION
 # ==============================================================================
-AGENTIC_EXPLORE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: {total_samples} timing arcs, {n_features} features, {n_cell_types} cell types
-- [Complete this based on the data below]
-- Method: [To be determined after analysis]
-- Allocation: Target {target_count} samples ({target_percentage:.1f}%)
-- Key reasons: [Fill after analysis with specific numbers]
-- Confidence: [To be assessed]
-- Top risk: [Identify biggest concern]
+AGENTIC_EXPLORE_PROMPT = """## MANDATORY FIRST STEP: Schema Discovery
+
+Before ANY analysis, execute this exact sequence:
+
+1. print(dataset.columns.tolist())
+2. print(dataset.head(3))
+3. print(dataset.dtypes)
+
+Read the output carefully. ONLY reference columns that actually exist.
 
 ### DETAILED TRACE
+
+**SCHEMA DISCOVERY RESULTS:**
+Show the actual column names, sample data, and data types from the commands above.
+
+**DATA PARSING FROM cell_arc_pt:**
+Parse cell_arc_pt column to extract timing domain information:
+
+```python
+# Extract cell name (everything before first #)
+dataset['cell_name'] = dataset['cell_arc_pt'].str.split('#').str[0]
+
+# Extract table position (last two numbers)
+dataset['table_row'] = dataset['cell_arc_pt'].str.extract(r'_(\d+)_\d+$')[0].astype(int)
+dataset['table_col'] = dataset['cell_arc_pt'].str.extract(r'_\d+_(\d+)$')[0].astype(int)
+
+# Extract arc direction
+dataset['arc_direction'] = dataset['cell_arc_pt'].str.extract(r'#(rise|fall)_\d+_\d+$')[0]
+
+# Identify boundary cases
+table_size = max(dataset['table_row'].max(), dataset['table_col'].max())
+dataset['is_boundary'] = (
+    ((dataset['table_row'] == 1) | (dataset['table_row'] == table_size)) &
+    ((dataset['table_col'] == 1) | (dataset['table_col'] == table_size))
+)
+
+print(f"Table size: {table_size}x{table_size}")
+print(f"Boundary cases: {dataset['is_boundary'].sum()} ({dataset['is_boundary'].mean()*100:.1f}%)")
+print(f"Cell types: {dataset['cell_name'].nunique()}")
+print(f"Rise/Fall distribution: {dataset['arc_direction'].value_counts()}")
+```
 
 **DATASET ANALYSIS WITH MEASURED STATISTICS:**
 {calculated_stats}
@@ -111,32 +259,37 @@ AGENTIC_EXPLORE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max
 {sigma_analysis}
 
 **TIMING DOMAIN ANALYSIS REQUIREMENTS:**
-Analyze this data through a timing engineer's lens:
+Analyze this data through a timing engineer's lens using ONLY columns that exist:
 
-1. SIGMA RISK ASSESSMENT: What percentage of arcs have sigma > 1.0? These are high-sensitivity and need overrepresentation.
-   [Observation]: [specific sigma distribution numbers]
+1. SIGMA RISK ASSESSMENT: What percentage of arcs have high sigma values? Use actual sigma column names from schema discovery.
+   [Observation]: [specific sigma distribution numbers from actual columns]
 
-2. DELAY RANGE COVERAGE: What's the min/max delay spread? Wide ranges indicate multiple operating regimes.
-   [Observation]: [specific delay statistics]
+2. DELAY RANGE COVERAGE: What's the min/max delay spread? Use actual delay column names.
+   [Observation]: [specific delay statistics from actual columns]
 
-3. BOUNDARY CASE IDENTIFICATION: How many arcs are in extreme slew/load conditions?
-   [Observation]: [specific boundary statistics]
+3. BOUNDARY CASE IDENTIFICATION: How many arcs are in corner table positions (1_1, 1_N, N_1, N_N)?
+   [Observation]: [specific boundary statistics from parsed table positions]
 
-4. CELL TYPE DISTRIBUTION: Are we dominated by one topology that won't generalize?
-   [Observation]: [specific cell type counts]
+4. CELL DIVERSITY: How many different cell_name values? Are we dominated by one topology?
+   [Observation]: [specific cell counts from parsed cell_name]
 
-5. PVT CORNER REPRESENTATION: Do we have adequate process/voltage/temperature corner coverage?
-   [Observation]: [specific corner statistics]
+5. ARC DIRECTION BALANCE: What's the rise vs fall distribution?
+   [Observation]: [specific rise/fall statistics from parsed arc_direction]
 
 **CORRELATION ANALYSIS:**
-Examine correlation matrix for redundancy. If any pair has |r| > 0.85, justify why PCA is/isn't needed.
-[Observation]: [specific correlation values]
+Examine correlation matrix for redundancy using ONLY columns that exist. If any pair has |r| > 0.85, justify why PCA is/isn't needed.
+[Observation]: [specific correlation values from actual columns]
 
 **CLUSTERING FEASIBILITY:**
 Based on the actual statistics above, assess if this dataset has natural clusters or requires boundary sampling.
 [Observation]: [specific evidence for clustering vs boundary approach]
 
-REMEMBER: Every statement must reference actual numbers from the analysis above."""
+**FINAL SUMMARY:**
+Target: {target_count} samples ({target_percentage:.1f}%) from {total_samples} timing arcs
+Key insight: [data-driven observation about what makes this dataset unique]
+Top risk: [biggest concern based on actual data analysis]
+
+REMEMBER: Every statement must reference actual numbers from columns that exist in the schema discovery."""
 
 # ==============================================================================
 # STEP 2: STRATEGY SYNTHESIS WITH VALIDATION
@@ -406,10 +559,10 @@ AGENTIC_LLM_PARAMETERS = {
 # QUALITY BOUNDARIES (Safety Rails)
 # ==============================================================================
 VALIDATION_BOUNDARIES = {
-    'minimum_cell_type_coverage': 0.8,     # Must represent at least 80% of cell types
+    'minimum_cell_type_coverage': 0.8,     # Must represent at least 80% of parsed cell types
     'maximum_cluster_imbalance': 3.0,      # No cluster should be >3x larger than smallest
-    'required_sigma_range_coverage': 0.95, # Must span 95% of sigma distribution
-    'boundary_case_minimum': 0.1,          # At least 10% samples from distribution tails
+    'required_sigma_range_coverage': 0.95, # Must span 95% of sigma distribution (if sigma columns exist)
+    'boundary_case_minimum': 0.1,          # At least 10% samples from table position boundaries
     'correlation_preservation': 0.85,      # Selected samples must preserve 85% of original correlations
 }
 
@@ -615,18 +768,31 @@ class TimingDataSelectionAgent:
         self._load_imports()
 
         try:
-            # Cell type coverage validation
-            if self.current_data is not None and 'cell_type' in self.current_data.columns:
-                total_cell_types = self.current_data['cell_type'].nunique()
-                selected_cell_types = self.current_data.iloc[selected_indices]['cell_type'].nunique()
-                cell_coverage = selected_cell_types / total_cell_types
+            # Cell name coverage validation (parsed from cell_arc_pt)
+            if self.current_data is not None:
+                # Try to parse cell names from cell_arc_pt if it exists
+                if 'cell_arc_pt' in self.current_data.columns:
+                    # Parse cell names from cell_arc_pt
+                    cell_names = self.current_data['cell_arc_pt'].str.split('#').str[0]
+                    selected_cell_names = self.current_data.iloc[selected_indices]['cell_arc_pt'].str.split('#').str[0]
 
-                min_coverage = self.validation_boundaries.get('minimum_cell_type_coverage', 0.8)
-                validation_results['cell_coverage'] = {
-                    'achieved': cell_coverage,
-                    'required': min_coverage,
-                    'passed': cell_coverage >= min_coverage
-                }
+                    total_cell_types = cell_names.nunique()
+                    selected_cell_types = selected_cell_names.nunique()
+                    cell_coverage = selected_cell_types / total_cell_types if total_cell_types > 0 else 0
+
+                    min_coverage = self.validation_boundaries.get('minimum_cell_type_coverage', 0.8)
+                    validation_results['cell_coverage'] = {
+                        'achieved': cell_coverage,
+                        'required': min_coverage,
+                        'passed': cell_coverage >= min_coverage
+                    }
+                else:
+                    validation_results['cell_coverage'] = {
+                        'achieved': 0.0,
+                        'required': 0.8,
+                        'passed': False,
+                        'reason': 'No cell_arc_pt column found for parsing cell types'
+                    }
 
             # Cluster balance validation
             if len(labels) > 0:
@@ -786,15 +952,28 @@ Return ONLY the JSON object, nothing else.""")
 
         observation['high_correlations'] = timing_correlations
 
-        # Cell type analysis
+        # Cell type analysis - parse from actual column names
+        print(f"[SCHEMA] Available columns: {list(self.current_data.columns)}")
         try:
-            if 'arc_pt' in self.current_data.columns:
+            if 'cell_arc_pt' in self.current_data.columns:
+                # Parse cell names from cell_arc_pt (everything before first #)
+                cell_names = self.current_data['cell_arc_pt'].str.split('#').str[0]
+                observation['cell_types'] = cell_names.value_counts().to_dict()
+                print(f"[SCHEMA] Parsed {len(observation['cell_types'])} cell types from cell_arc_pt column")
+                print(f"[SCHEMA] Sample cell names: {list(observation['cell_types'].keys())[:5]}")
+            elif 'arc_pt' in self.current_data.columns:
+                # Fallback to arc_pt if available
                 cell_types = self.current_data['arc_pt'].str.extract(r'^([A-Z0-9]+)')[0]
                 observation['cell_types'] = cell_types.value_counts().to_dict()
+                print(f"[SCHEMA] Parsed {len(observation['cell_types'])} cell types from arc_pt column")
             else:
                 observation['cell_types'] = {'unknown': len(self.current_data)}
-        except:
+                print("[SCHEMA] Warning: No cell identifier column found - cannot parse cell types")
+                print(f"[SCHEMA] Available columns for reference: {list(self.current_data.columns)}")
+        except Exception as e:
             observation['cell_types'] = {'unknown': len(self.current_data)}
+            print(f"[SCHEMA] Error parsing cell types: {e}")
+            print(f"[SCHEMA] Available columns: {list(self.current_data.columns)}")
 
         # CRITICAL FIX: Calculate actual statistics for prompt injection
         calculated_stats = []
@@ -2059,42 +2238,66 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
     def _export_html_dashboard(self, fig, dashboard_data: Dict) -> str:
         """Export interactive dashboard as standalone HTML."""
 
-        summary = dashboard_data['summary']
-        html_filename = f"timing_dashboard_{summary['selected_count']}_samples.html"
-        html_path = os.path.join(os.getcwd(), html_filename)
+        try:
+            summary = dashboard_data.get('summary', {})
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-        # Add summary annotation
-        fig.add_annotation(
-            xref="paper", yref="paper",
-            x=0.02, y=0.98,
-            text=f"<b>Summary:</b> {summary['selected_count']:,} samples selected " +
-                 f"({summary['selection_percentage']:.1f}%) from {summary['total_samples']:,} total " +
-                 f"across {summary['num_clusters']} clusters",
-            showarrow=False,
-            font=dict(size=14, color="white"),
-            align="left",
-            bgcolor="rgba(0,0,0,0.5)",
-            bordercolor="white",
-            borderwidth=1
-        )
+            # Get selected count safely
+            selected_count = summary.get('selected_count', 0)
+            total_samples = summary.get('total_samples', 0)
+            selection_percentage = summary.get('selection_percentage', 0.0)
+            num_clusters = summary.get('num_clusters', 0)
 
-        # Export with full interactivity
-        fig.write_html(
-            html_path,
-            include_plotlyjs=True,
-            config={
-                'displayModeBar': True,
-                'displaylogo': False,
-                'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
-                'toImageButtonOptions': {
-                    'format': 'png',
-                    'filename': 'timing_dashboard',
-                    'height': 800,
-                    'width': 1200,
-                    'scale': 2
-                }
-            }
-        )
+            # Create safe filename
+            html_filename = f"timing_dashboard_{selected_count}samples_{timestamp}.html"
+            html_path = os.path.join(tempfile.gettempdir(), html_filename)
+
+            # Ensure the temp directory exists
+            os.makedirs(os.path.dirname(html_path), exist_ok=True)
+
+            # Add summary annotation
+            fig.add_annotation(
+                xref="paper", yref="paper",
+                x=0.02, y=0.98,
+                text=f"<b>Summary:</b> {selected_count:,} samples selected " +
+                     f"({selection_percentage:.1f}%) from {total_samples:,} total " +
+                     f"across {num_clusters} clusters",
+                showarrow=False,
+                font=dict(size=14, color="white"),
+                align="left",
+                bgcolor="rgba(0,0,0,0.5)",
+                bordercolor="white",
+                borderwidth=1
+            )
+
+            # Export with full interactivity and error handling
+            fig.write_html(
+                html_path,
+                include_plotlyjs=True,
+                config={
+                    'displayModeBar': True,
+                    'displaylogo': False,
+                    'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
+                    'toImageButtonOptions': {
+                        'format': 'png',
+                        'filename': f'timing_dashboard_{selected_count}samples',
+                        'height': 800,
+                        'width': 1200,
+                        'scale': 2
+                    }
+                },
+                div_id="timing-dashboard",
+                include_mathjax=False
+            )
+
+            print(f"Interactive dashboard exported successfully: {html_path}")
+            return html_path
+
+        except Exception as e:
+            print(f"Failed to export HTML dashboard: {str(e)}")
+            print(f"Error details: {type(e).__name__}")
+            # Return None to indicate failure rather than crashing
+            return None
 
         print(f"Interactive dashboard exported: {html_path}")
         return html_path
