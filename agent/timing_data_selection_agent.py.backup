@@ -807,21 +807,21 @@ class AutonomousExplorationEngine:
                 # Agent evaluates its own progress
                 progress_assessment = await self._assess_exploration_progress()
 
-                print(f"✅ Quality Score: {result.quality_score:.3f}")
-                print(f"📈 Progress: {progress_assessment['completion_percentage']:.1f}%")
+                print(f"[SUCCESS] Quality Score: {result.quality_score:.3f}")
+                print(f"[PROGRESS] Progress: {progress_assessment['completion_percentage']:.1f}%")
 
                 # Early stopping if agent is satisfied
                 if progress_assessment['should_stop']:
-                    print(f"🎯 Agent satisfied with exploration after {self.iteration_count} iterations")
+                    print(f"[TARGET] Agent satisfied with exploration after {self.iteration_count} iterations")
                     break
 
             except Exception as e:
-                print(f"❌ Exploration error: {e}")
+                print(f"[ERROR] Exploration error: {e}")
                 recovery = await self._autonomous_recovery(str(e))
                 if not recovery['can_continue']:
                     break
 
-        print(f"\n🏁 Autonomous exploration complete: {len(exploration_results)} iterations")
+        print(f"\n[COMPLETE] Autonomous exploration complete: {len(exploration_results)} iterations")
 
         return {
             'exploration_results': exploration_results,
@@ -845,7 +845,7 @@ class AutonomousExplorationEngine:
         # Agent autonomously decides what to explore
         exploration_prompt = get_autonomous_exploration_prompt(context)
 
-        print(f"🧠 Agent thinking...")
+        print(f"[THINK] Agent thinking...")
 
         # Get agent's autonomous decision
         response = await self._query_llm(exploration_prompt)
@@ -853,8 +853,8 @@ class AutonomousExplorationEngine:
         # Parse agent's thought and action
         thought, action = self._parse_thought_action(response)
 
-        print(f"💭 Thought: {thought[:100]}...")
-        print(f"⚡ Action: Executing autonomous code...")
+        print(f"[THOUGHT] Thought: {thought[:100]}...")
+        print(f"[ACTION] Action: Executing autonomous code...")
 
         # Execute agent's autonomous action
         observation = self._execute_autonomous_action(action)
@@ -1150,7 +1150,7 @@ class ParallelExperimentExecutor:
     async def execute_experiments_parallel(self, hypotheses: List[Hypothesis]) -> List[Dict[str, Any]]:
         """Execute multiple experiments in parallel."""
 
-        print(f"🚀 Running {len(hypotheses)} experiments in parallel...")
+        print(f"[START] Running {len(hypotheses)} experiments in parallel...")
 
         # Create experiment designs for each hypothesis
         experiment_designs = []
@@ -1173,9 +1173,9 @@ class ParallelExperimentExecutor:
                     result['hypothesis'] = hypothesis
                     result['design'] = design
                     results.append(result)
-                    print(f"✅ Experiment completed: {hypothesis.id}")
+                    print(f"[SUCCESS] Experiment completed: {hypothesis.id}")
                 except Exception as e:
-                    print(f"❌ Experiment failed: {hypothesis.id} - {e}")
+                    print(f"[ERROR] Experiment failed: {hypothesis.id} - {e}")
                     results.append({
                         'hypothesis': hypothesis,
                         'design': design,
@@ -1366,7 +1366,7 @@ class AutonomousValidationSystem:
     async def autonomous_validate(self, results: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Agent autonomously validates results against learned patterns."""
 
-        print(f"🔍 Autonomous validation in progress...")
+        print(f"[VALIDATE] Autonomous validation in progress...")
 
         # Basic boundary validation
         boundary_validation = self._validate_boundaries(results)
@@ -1392,7 +1392,7 @@ class AutonomousValidationSystem:
         # Learn from this validation
         self._learn_from_validation(overall_validation, results, context)
 
-        print(f"✅ Validation complete: {'PASSED' if overall_validation['overall_passed'] else 'FAILED'}")
+        print(f"[SUCCESS] Validation complete: {'PASSED' if overall_validation['overall_passed'] else 'FAILED'}")
 
         return overall_validation
 
@@ -1529,7 +1529,7 @@ class AutonomousStrategySynthesizer:
     async def autonomous_synthesize(self, exploration_results: List[Dict], experiment_results: List[Dict], validation_results: Dict) -> Dict[str, Any]:
         """Agent autonomously synthesizes optimal strategy from all learnings."""
 
-        print(f"🧩 Autonomous strategy synthesis...")
+        print(f"[SYNTHESIS] Autonomous strategy synthesis...")
 
         # Prepare comprehensive context
         synthesis_context = {
@@ -1567,7 +1567,7 @@ class AutonomousStrategySynthesizer:
             'validation': strategy_validation
         })
 
-        print(f"✅ Strategy synthesis complete: {final_strategy.get('algorithm', 'unknown')}")
+        print(f"[SUCCESS] Strategy synthesis complete: {final_strategy.get('algorithm', 'unknown')}")
 
         return final_strategy
 
@@ -1793,35 +1793,35 @@ class TimingDataSelectionAgent:
         Returns:
             Complete autonomous sampling results with strategy and selected indices
         """
-        print(f"\n🚀 AUTONOMOUS SAMPLING PIPELINE INITIATED")
-        print(f"📊 Target: {target_percentage}% of samples")
-        print(f"🎯 Mode: Fully autonomous with {self.exploration_engine.max_iterations} max exploration iterations")
+        print(f"\n[START] AUTONOMOUS SAMPLING PIPELINE INITIATED")
+        print(f"[DATA] Target: {target_percentage}% of samples")
+        print(f"[TARGET] Mode: Fully autonomous with {self.exploration_engine.max_iterations} max exploration iterations")
 
         # Load dataset
         self.current_data = pd.read_csv(csv_path)
         self.execution_context['dataset'] = self.current_data
         self.execution_context['current_data'] = self.current_data
 
-        print(f"📁 Dataset loaded: {len(self.current_data)} samples")
+        print(f"[FILE] Dataset loaded: {len(self.current_data)} samples")
 
         try:
             # Phase 1: Autonomous Exploration - Agent discovers data characteristics
-            print(f"\n🔍 PHASE 1: AUTONOMOUS EXPLORATION")
+            print(f"\n[VALIDATE] PHASE 1: AUTONOMOUS EXPLORATION")
             exploration_results = await self.exploration_engine.autonomous_explore(
                 self.current_data,
                 target_percentage
             )
 
             # Phase 2: Autonomous Hypothesis Generation
-            print(f"\n💡 PHASE 2: AUTONOMOUS HYPOTHESIS GENERATION")
+            print(f"\n[HYPOTHESIS] PHASE 2: AUTONOMOUS HYPOTHESIS GENERATION")
             hypotheses = await self._generate_autonomous_hypotheses(exploration_results)
 
             # Phase 3: Parallel Autonomous Experimentation
-            print(f"\n⚗️ PHASE 3: PARALLEL AUTONOMOUS EXPERIMENTATION")
+            print(f"\n[EXPERIMENT] PHASE 3: PARALLEL AUTONOMOUS EXPERIMENTATION")
             experiment_results = await self.experiment_executor.execute_experiments_parallel(hypotheses)
 
             # Phase 4: Autonomous Validation
-            print(f"\n🔍 PHASE 4: AUTONOMOUS VALIDATION")
+            print(f"\n[VALIDATE] PHASE 4: AUTONOMOUS VALIDATION")
             validation_results = {}
             for result in experiment_results:
                 if result.get('success'):
@@ -1832,7 +1832,7 @@ class TimingDataSelectionAgent:
                     validation_results[result.get('algorithm', 'unknown')] = validation
 
             # Phase 5: Autonomous Strategy Synthesis
-            print(f"\n🧩 PHASE 5: AUTONOMOUS STRATEGY SYNTHESIS")
+            print(f"\n[SYNTHESIS] PHASE 5: AUTONOMOUS STRATEGY SYNTHESIS")
             final_strategy = await self.strategy_synthesizer.autonomous_synthesize(
                 exploration_results.get('exploration_results', []),
                 experiment_results,
@@ -1840,18 +1840,18 @@ class TimingDataSelectionAgent:
             )
 
             # Phase 6: Execute Final Sampling with Autonomous Strategy
-            print(f"\n🎯 PHASE 6: AUTONOMOUS SAMPLE EXECUTION")
+            print(f"\n[TARGET] PHASE 6: AUTONOMOUS SAMPLE EXECUTION")
             selected_indices = await self._execute_autonomous_sampling(final_strategy, target_percentage)
 
             # Autonomous Quality Assessment
-            print(f"\n📈 PHASE 7: AUTONOMOUS QUALITY ASSESSMENT")
+            print(f"\n[PROGRESS] PHASE 7: AUTONOMOUS QUALITY ASSESSMENT")
             quality_assessment = await self._autonomous_quality_assessment(
                 selected_indices, final_strategy, exploration_results, experiment_results
             )
 
-            print(f"\n🏁 AUTONOMOUS PIPELINE COMPLETE")
-            print(f"✅ Selected {len(selected_indices)} samples using {final_strategy.get('algorithm', 'unknown')} strategy")
-            print(f"📊 Quality Score: {quality_assessment.get('overall_quality', 0):.3f}")
+            print(f"\n[COMPLETE] AUTONOMOUS PIPELINE COMPLETE")
+            print(f"[SUCCESS] Selected {len(selected_indices)} samples using {final_strategy.get('algorithm', 'unknown')} strategy")
+            print(f"[DATA] Quality Score: {quality_assessment.get('overall_quality', 0):.3f}")
 
             return {
                 'selected_indices': selected_indices,
@@ -1870,7 +1870,7 @@ class TimingDataSelectionAgent:
             }
 
         except Exception as e:
-            print(f"❌ Autonomous pipeline error: {e}")
+            print(f"[ERROR] Autonomous pipeline error: {e}")
             # Autonomous error recovery
             recovery = await self.exploration_engine._autonomous_recovery(str(e))
             return {
@@ -1909,14 +1909,14 @@ class TimingDataSelectionAgent:
             # Parse hypotheses from response
             hypotheses = self._parse_hypotheses_from_response(hypothesis_text)
 
-            print(f"💡 Generated {len(hypotheses)} autonomous hypotheses")
+            print(f"[HYPOTHESIS] Generated {len(hypotheses)} autonomous hypotheses")
             for i, h in enumerate(hypotheses):
                 print(f"   {i+1}. {h.description[:60]}...")
 
             return hypotheses
 
         except Exception as e:
-            print(f"⚠️ Hypothesis generation error: {e}")
+            print(f"[WARNING] Hypothesis generation error: {e}")
             # Return default hypotheses
             return self._get_default_hypotheses()
 
@@ -2007,7 +2007,7 @@ class TimingDataSelectionAgent:
             X = self.current_data[numeric_cols].values
 
             if len(X) == 0:
-                print("⚠️ No numeric data available, using random sampling")
+                print("[WARNING] No numeric data available, using random sampling")
                 n_samples = int(len(self.current_data) * target_percentage / 100)
                 return np.random.choice(len(self.current_data), size=n_samples, replace=False).tolist()
 
@@ -2037,12 +2037,12 @@ class TimingDataSelectionAgent:
             # Sample from each cluster using uncertainty sampling
             selected_indices = self._uncertainty_sampling_from_clusters(X_scaled, labels, target_percentage)
 
-            print(f"🎯 Selected {len(selected_indices)} samples using autonomous {algorithm} strategy")
+            print(f"[TARGET] Selected {len(selected_indices)} samples using autonomous {algorithm} strategy")
 
             return selected_indices
 
         except Exception as e:
-            print(f"⚠️ Sampling execution error: {e}, falling back to random sampling")
+            print(f"[WARNING] Sampling execution error: {e}, falling back to random sampling")
             n_samples = int(len(self.current_data) * target_percentage / 100)
             return np.random.choice(len(self.current_data), size=n_samples, replace=False).tolist()
 
@@ -2138,14 +2138,14 @@ class TimingDataSelectionAgent:
                 assessment['strategy_confidence'] * 0.3
             )
 
-            print(f"📊 Quality Assessment:")
+            print(f"[DATA] Quality Assessment:")
             print(f"   Coverage: {assessment['coverage_quality']:.3f}")
             print(f"   Strategy Performance: {assessment['strategy_performance']:.3f}")
             print(f"   Strategy Confidence: {assessment['strategy_confidence']:.3f}")
             print(f"   Overall Quality: {assessment['overall_quality']:.3f}")
 
         except Exception as e:
-            print(f"⚠️ Quality assessment error: {e}")
+            print(f"[WARNING] Quality assessment error: {e}")
             assessment['error'] = str(e)
 
         return assessment
