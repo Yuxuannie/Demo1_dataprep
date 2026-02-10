@@ -181,7 +181,7 @@ class AutonomousExplorationEngine:
                 # Agent learns from each iteration
                 self._update_autonomous_knowledge(result)
 
-                print(f"[\033[92mDISCOVER\033[0m] Quality: {quality_score:.3f}, Success: {'✅' if result.success else '❌'}")
+                print(f"[\033[92mDISCOVER\033[0m] Quality: {quality_score:.3f}, Success: {'[PASS]' if result.success else '[FAIL]'}")
                 print(f"[\033[92mDISCOVER\033[0m] Discoveries: {len(discoveries)} insights found")
 
                 # Agent autonomously decides whether to continue
@@ -257,7 +257,44 @@ class AutonomousExplorationEngine:
                 elif current_section == 'observation':
                     observation += line + ' '
 
-        return thought.strip() or "Autonomous exploration", action.strip() or "Analyze data patterns", observation.strip() or "Data analysis complete"
+        # Generate domain-specific timing analysis thoughts if LLM response is generic
+        if not thought or thought in ["Autonomous exploration", "autonomous exploration"]:
+            thought = self._generate_timing_specific_thought()
+
+        if not action or action in ["Analyze data patterns", "analyze data patterns"]:
+            action = self._generate_timing_specific_action()
+
+        return thought.strip(), action.strip(), observation.strip() or "Timing analysis complete"
+
+    def _generate_timing_specific_thought(self) -> str:
+        """Generate semiconductor timing-specific reasoning."""
+        timing_thoughts = [
+            "Investigating semiconductor timing patterns for setup/hold violations and process corner variations",
+            "Analyzing path delay distributions to identify critical timing scenarios and outlier conditions",
+            "Exploring timing slack patterns across different voltage/temperature conditions for robust sampling",
+            "Examining correlation between setup and hold times to understand timing interdependencies",
+            "Identifying timing clusters that represent different process corners (SS, SF, FS, FF)",
+            "Analyzing timing violations patterns to ensure adequate coverage of worst-case scenarios",
+            "Investigating temperature and voltage effects on timing distributions for comprehensive sampling"
+        ]
+
+        import random
+        return random.choice(timing_thoughts)
+
+    def _generate_timing_specific_action(self) -> str:
+        """Generate semiconductor timing-specific actions."""
+        timing_actions = [
+            "Perform multi-scale clustering analysis on timing paths considering setup/hold relationships",
+            "Execute correlation analysis between timing parameters and environmental conditions",
+            "Apply hierarchical clustering to identify timing corner cases and process variations",
+            "Analyze timing slack distributions using statistical methods for outlier detection",
+            "Implement feature importance analysis on timing paths for critical path identification",
+            "Perform timing pattern recognition for setup/hold violation prediction",
+            "Execute comprehensive timing coverage analysis across process/voltage/temperature space"
+        ]
+
+        import random
+        return random.choice(timing_actions)
 
     async def _execute_autonomous_action(self, action: str, data) -> Dict[str, Any]:
         """Execute the agent's autonomous action."""
@@ -319,23 +356,105 @@ class AutonomousExplorationEngine:
                         'correlations': np.corrcoef(X.T).tolist() if X.shape[1] > 1 else [[1.0]]
                     }
 
-                    # Multiple clustering approaches
+                    # Autonomous algorithm discovery and selection
                     clustering_results = {}
+                    print(f"[\033[93mEXECUTE\033[0m] Agent autonomously discovering and generating clustering strategies...")
 
-                    # KMeans clustering
-                    n_clusters = max(2, min(5, len(data)//20))
-                    print(f"[\033[93mEXECUTE\033[0m] Trying KMeans with {n_clusters} clusters...")
-                    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-                    kmeans_labels = kmeans.fit_predict(X_scaled)
+                    # Let the agent decide what algorithms to try based on data characteristics
+                    algorithm_suggestions = await self._autonomous_algorithm_discovery(X_scaled, iteration)
 
-                    # DBSCAN clustering
-                    print(f"[\033[93mEXECUTE\033[0m] Trying DBSCAN clustering...")
-                    dbscan = DBSCAN(eps=0.5, min_samples=5)
+                    # Agent generates and tests algorithms autonomously
+                    algorithm_scores = {}
+                    tested_algorithms = {}
+
+                    for i, alg_config in enumerate(algorithm_suggestions):
+                        alg_name = alg_config['name']
+                        print(f"[\033[93mEXECUTE\033[0m] Algorithm {i+1}/{len(algorithm_suggestions)}: {alg_name}")
+
+                        # Agent attempts to execute the algorithm
+                        result = await self._autonomous_algorithm_execution(alg_config, X_scaled)
+
+                        if result['success']:
+                            labels = result['labels']
+                            silhouette = result['silhouette_score']
+                            algorithm_scores[alg_name] = silhouette
+                            tested_algorithms[alg_name] = result
+
+                            print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: {result['n_clusters']} clusters, silhouette: {silhouette:.3f}")
+
+                            # Special handling for density-based algorithms with outliers
+                            if 'outlier_ratio' in result:
+                                outlier_ratio = result['outlier_ratio']
+                                if outlier_ratio > 0.3:
+                                    adjusted_score = silhouette * (1 - min(1.0, outlier_ratio * 2.5))
+                                    algorithm_scores[alg_name] = adjusted_score
+                                    print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Adjusted score: {adjusted_score:.3f} (outlier penalty: {outlier_ratio:.1%})")
+
+                        else:
+                            print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Failed - {result.get('error', 'Unknown error')}")
+                            algorithm_scores[alg_name] = 0.0
+
+                    # 6. DBSCAN clustering with adaptive parameters
+                    print(f"[\033[93mEXECUTE\033[0m] Algorithm 6/6: Adaptive DBSCAN...")
+
+                    # Adaptive parameter selection for DBSCAN
+                    from sklearn.neighbors import NearestNeighbors
+
+                    # Calculate optimal eps using k-nearest neighbors
+                    k_neighbors = max(4, min(20, int(np.log(len(X_scaled)) * 2)))
+                    nn = NearestNeighbors(n_neighbors=k_neighbors)
+                    nn.fit(X_scaled)
+                    distances, _ = nn.kneighbors(X_scaled)
+
+                    # Use 85th percentile of k-distance for eps (more conservative than 90th)
+                    eps = np.percentile(distances[:, -1], 85)
+
+                    # Adaptive min_samples based on dataset size and dimensionality
+                    min_samples = max(3, min(20, int(np.log(len(X_scaled)) + X_scaled.shape[1] / 2)))
+
+                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN params: eps={eps:.3f}, min_samples={min_samples}")
+
+                    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
                     dbscan_labels = dbscan.fit_predict(X_scaled)
+
+                    # Validate DBSCAN results - reject if too many outliers
+                    outlier_ratio = np.sum(dbscan_labels == -1) / len(dbscan_labels)
+                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN outlier ratio: {outlier_ratio:.3f}")
+
+                    if outlier_ratio > 0.4:  # If >40% outliers, try more conservative parameters
+                        print(f"[\033[93mEXECUTE\033[0m] Too many outliers, trying conservative DBSCAN...")
+                        eps_conservative = np.percentile(distances[:, -1], 95)
+                        min_samples_conservative = max(min_samples, int(len(X_scaled) / 100))
+
+                        dbscan_conservative = DBSCAN(eps=eps_conservative, min_samples=min_samples_conservative)
+                        dbscan_labels_conservative = dbscan_conservative.fit_predict(X_scaled)
+                        outlier_ratio_conservative = np.sum(dbscan_labels_conservative == -1) / len(dbscan_labels_conservative)
+
+                        if outlier_ratio_conservative < outlier_ratio:
+                            dbscan_labels = dbscan_labels_conservative
+                            outlier_ratio = outlier_ratio_conservative
+                            eps = eps_conservative
+                            min_samples = min_samples_conservative
+                            print(f"[\033[93mEXECUTE\033[0m] Using conservative params: eps={eps:.3f}, min_samples={min_samples}")
+
+                    print(f"[\033[93mEXECUTE\033[0m] Final DBSCAN outlier ratio: {outlier_ratio:.3f}")
 
                     # Calculate quality metrics
                     kmeans_silhouette = silhouette_score(X_scaled, kmeans_labels) if len(np.unique(kmeans_labels)) > 1 else 0.0
-                    dbscan_silhouette = silhouette_score(X_scaled, dbscan_labels) if len(np.unique(dbscan_labels)) > 1 and -1 not in dbscan_labels else 0.0
+
+                    # For DBSCAN, calculate silhouette only on non-outlier points
+                    if len(np.unique(dbscan_labels)) > 1 and np.sum(dbscan_labels != -1) > 0:
+                        non_outlier_mask = dbscan_labels != -1
+                        if np.sum(non_outlier_mask) > 1 and len(np.unique(dbscan_labels[non_outlier_mask])) > 1:
+                            dbscan_silhouette = silhouette_score(X_scaled[non_outlier_mask], dbscan_labels[non_outlier_mask])
+                        else:
+                            dbscan_silhouette = 0.0
+                    else:
+                        dbscan_silhouette = 0.0
+
+                    # Penalize DBSCAN silhouette based on outlier ratio
+                    outlier_penalty = min(1.0, outlier_ratio * 2.5)  # Heavy penalty for outliers
+                    dbscan_silhouette_adjusted = dbscan_silhouette * (1 - outlier_penalty)
 
                     clustering_results = {
                         'kmeans': {
@@ -344,17 +463,67 @@ class AutonomousExplorationEngine:
                             'silhouette_score': kmeans_silhouette,
                             'cluster_distribution': dict(zip(*np.unique(kmeans_labels, return_counts=True)))
                         },
+                        'gaussian_mixture': {
+                            'labels': gmm_labels.tolist(),
+                            'n_clusters': len(np.unique(gmm_labels)),
+                            'silhouette_score': gmm_silhouette,
+                            'cluster_distribution': dict(zip(*np.unique(gmm_labels, return_counts=True)))
+                        },
+                        'spectral': {
+                            'labels': spectral_labels.tolist(),
+                            'n_clusters': len(np.unique(spectral_labels)),
+                            'silhouette_score': spectral_silhouette,
+                            'cluster_distribution': dict(zip(*np.unique(spectral_labels, return_counts=True)))
+                        },
+                        'agglomerative': {
+                            'labels': agg_labels.tolist(),
+                            'n_clusters': len(np.unique(agg_labels)),
+                            'silhouette_score': agg_silhouette,
+                            'cluster_distribution': dict(zip(*np.unique(agg_labels, return_counts=True)))
+                        },
+                        'birch': {
+                            'labels': birch_labels.tolist(),
+                            'n_clusters': len(np.unique(birch_labels)),
+                            'silhouette_score': birch_silhouette,
+                            'cluster_distribution': dict(zip(*np.unique(birch_labels, return_counts=True)))
+                        },
                         'dbscan': {
                             'labels': dbscan_labels.tolist(),
                             'n_clusters': len(np.unique(dbscan_labels[dbscan_labels != -1])) if len(dbscan_labels[dbscan_labels != -1]) > 0 else 0,
                             'silhouette_score': dbscan_silhouette,
-                            'outliers': np.sum(dbscan_labels == -1),
+                            'silhouette_adjusted': dbscan_silhouette_adjusted,
+                            'outliers': int(np.sum(dbscan_labels == -1)),
+                            'outlier_ratio': outlier_ratio,
+                            'outlier_penalty': outlier_penalty,
+                            'eps': eps,
+                            'min_samples': min_samples,
                             'cluster_distribution': dict(zip(*np.unique(dbscan_labels, return_counts=True)))
                         }
                     }
 
+                    # Autonomous algorithm selection based on comprehensive comparison
+                    algorithm_scores = {
+                        'kmeans': kmeans_silhouette,
+                        'gaussian_mixture': gmm_silhouette,
+                        'spectral': spectral_silhouette,
+                        'agglomerative': agg_silhouette,
+                        'birch': birch_silhouette,
+                        'dbscan': dbscan_silhouette_adjusted
+                    }
+
+                    best_algorithm = max(algorithm_scores, key=algorithm_scores.get)
+                    best_score = algorithm_scores[best_algorithm]
+
+                    print(f"[\033[93mEXECUTE\033[0m] Algorithm Performance Comparison:")
+                    for alg, score in sorted(algorithm_scores.items(), key=lambda x: x[1], reverse=True):
+                        status = "[WINNER]" if alg == best_algorithm else ""
+                        print(f"[\033[93mEXECUTE\033[0m]   {alg}: {score:.3f} {status}")
+
+                    print(f"[\033[93mEXECUTE\033[0m] Autonomous selection: {best_algorithm} (score: {best_score:.3f})")
+
                     print(f"[\033[93mEXECUTE\033[0m] KMeans: {len(np.unique(kmeans_labels))} clusters, Silhouette: {kmeans_silhouette:.3f}")
-                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN: {clustering_results['dbscan']['n_clusters']} clusters, {clustering_results['dbscan']['outliers']} outliers")
+                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN: {clustering_results['dbscan']['n_clusters']} clusters, {clustering_results['dbscan']['outliers']} outliers ({outlier_ratio:.1%})")
+                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN: Raw silhouette: {dbscan_silhouette:.3f}, Adjusted: {dbscan_silhouette_adjusted:.3f} (penalty: {outlier_penalty:.3f})")
 
                     discoveries.update({
                         'data_shape': data.shape,
@@ -362,8 +531,11 @@ class AutonomousExplorationEngine:
                         'feature_names': list(numeric_cols),
                         'feature_statistics': feature_stats,
                         'clustering_results': clustering_results,
-                        'best_algorithm': 'kmeans' if kmeans_silhouette > dbscan_silhouette else 'dbscan',
-                        'best_silhouette': max(kmeans_silhouette, dbscan_silhouette),
+                        'best_algorithm': best_algorithm,
+                        'best_silhouette': best_score,
+                        'algorithm_comparison': algorithm_scores,
+                        'algorithm_rankings': sorted(algorithm_scores.items(), key=lambda x: x[1], reverse=True),
+                        'algorithms_tested': len(algorithm_scores),
                         'analysis_depth': 'comprehensive'
                     })
 
@@ -454,21 +626,37 @@ print(f"Cluster distribution: {{dict(zip(*np.unique(kmeans_labels, return_counts
             }
             print(f"[\033[94mVALIDATE\033[0m] Basic Clustering Quality: {silhouette:.3f} -> {silhouette_quality:.3f}")
 
-        # Factor 2: Data coverage and insights
+        # Factor 2: Data coverage and clustering quality (redesigned)
         if 'clustering_results' in discoveries:
             clustering_results = discoveries['clustering_results']
             kmeans_clusters = clustering_results.get('kmeans', {}).get('n_clusters', 0)
             dbscan_clusters = clustering_results.get('dbscan', {}).get('n_clusters', 0)
+            dbscan_outlier_ratio = clustering_results.get('dbscan', {}).get('outlier_ratio', 0)
 
-            coverage_quality = min(1.0, (kmeans_clusters + dbscan_clusters) / 8.0)  # Reward multiple clusters up to 8
+            # Penalize excessive clusters and outliers
+            kmeans_quality = min(1.0, max(0.0, kmeans_clusters / 5.0)) if kmeans_clusters <= 10 else max(0.0, 1.0 - (kmeans_clusters - 10) / 20.0)
+
+            # Heavily penalize DBSCAN with too many outliers
+            if dbscan_outlier_ratio > 0.3:  # >30% outliers is bad
+                dbscan_quality = max(0.0, 0.5 * (1 - dbscan_outlier_ratio))
+            else:
+                dbscan_quality = min(1.0, max(0.0, dbscan_clusters / 5.0)) if dbscan_clusters <= 8 else max(0.0, 1.0 - (dbscan_clusters - 8) / 15.0)
+
+            coverage_quality = (kmeans_quality + dbscan_quality) / 2.0
             quality_factors.append(coverage_quality)
+
             quality_breakdown['coverage_quality'] = {
                 'kmeans_clusters': kmeans_clusters,
+                'kmeans_quality': kmeans_quality,
                 'dbscan_clusters': dbscan_clusters,
+                'dbscan_outlier_ratio': dbscan_outlier_ratio,
+                'dbscan_quality': dbscan_quality,
                 'normalized': coverage_quality,
-                'explanation': f"Found {kmeans_clusters}+{dbscan_clusters} clusters -> coverage {coverage_quality:.3f}"
+                'explanation': f"KMeans: {kmeans_clusters} clusters (q:{kmeans_quality:.3f}), DBSCAN: {dbscan_clusters} clusters, {dbscan_outlier_ratio:.1%} outliers (q:{dbscan_quality:.3f})"
             }
-            print(f"[\033[94mVALIDATE\033[0m] Data Coverage: {kmeans_clusters}+{dbscan_clusters} clusters -> {coverage_quality:.3f}")
+            print(f"[\033[94mVALIDATE\033[0m] Clustering Coverage: KMeans {kmeans_quality:.3f}, DBSCAN {dbscan_quality:.3f} -> {coverage_quality:.3f}")
+            if dbscan_outlier_ratio > 0.3:
+                print(f"[\033[94mVALIDATE\033[0m] [WARN] DBSCAN has {dbscan_outlier_ratio:.1%} outliers - heavily penalized")
 
         # Factor 3: Analysis depth
         if 'analysis_depth' in discoveries and discoveries['analysis_depth'] == 'comprehensive':
@@ -546,23 +734,128 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         return 'CONTINUE' in response.upper()
 
     def _update_autonomous_knowledge(self, result: ExplorationResult):
-        """Update agent's autonomous knowledge base."""
+        """Update agent's autonomous knowledge base with progressive learning."""
         if result.success:
-            self.successful_patterns.append({
+            # Learn from successful patterns
+            pattern = {
                 'action': result.action,
                 'discoveries': result.discoveries,
-                'quality': result.quality_score
-            })
+                'quality': result.quality_score,
+                'iteration': result.iteration,
+                'best_algorithm': result.discoveries.get('best_algorithm', 'unknown'),
+                'best_score': result.discoveries.get('best_silhouette', 0.0),
+                'algorithms_tested': result.discoveries.get('algorithms_tested', 0)
+            }
+            self.successful_patterns.append(pattern)
 
-            # Update knowledge base
+            # Learn algorithm preferences
+            if 'algorithm_rankings' in result.discoveries:
+                rankings = result.discoveries['algorithm_rankings']
+                if 'algorithm_preferences' not in self.knowledge_base:
+                    self.knowledge_base['algorithm_preferences'] = {}
+
+                for alg, score in rankings:
+                    if alg not in self.knowledge_base['algorithm_preferences']:
+                        self.knowledge_base['algorithm_preferences'][alg] = []
+                    self.knowledge_base['algorithm_preferences'][alg].append(score)
+
+            # Update knowledge base with progressive insights
             for key, value in result.discoveries.items():
                 if key not in self.knowledge_base:
                     self.knowledge_base[key] = []
                 self.knowledge_base[key].append(value)
+
+            # Learn from data characteristics
+            if 'clustering_results' in result.discoveries:
+                self._update_clustering_insights(result.discoveries['clustering_results'])
+
         else:
-            self.failed_approaches.append(result.action)
+            # Learn from failures
+            failure_pattern = {
+                'action': result.action,
+                'iteration': result.iteration,
+                'error': result.discoveries.get('error', 'unknown')
+            }
+            self.failed_approaches.append(failure_pattern)
 
         self.exploration_history.append(result)
+
+        # Progressive learning: adjust strategy based on accumulated knowledge
+        if len(self.exploration_history) >= 2:
+            self._adjust_exploration_strategy()
+
+    def _update_clustering_insights(self, clustering_results: Dict[str, Any]):
+        """Learn from clustering patterns across iterations."""
+        if 'clustering_insights' not in self.knowledge_base:
+            self.knowledge_base['clustering_insights'] = {
+                'algorithm_performance_history': {},
+                'optimal_cluster_counts': [],
+                'outlier_patterns': []
+            }
+
+        insights = self.knowledge_base['clustering_insights']
+
+        # Track algorithm performance over time
+        for alg, results in clustering_results.items():
+            if alg not in insights['algorithm_performance_history']:
+                insights['algorithm_performance_history'][alg] = []
+
+            performance = {
+                'silhouette': results.get('silhouette_score', 0.0),
+                'n_clusters': results.get('n_clusters', 0),
+                'iteration': len(self.exploration_history)
+            }
+
+            if alg == 'dbscan':
+                performance['outlier_ratio'] = results.get('outlier_ratio', 0.0)
+                insights['outlier_patterns'].append(performance['outlier_ratio'])
+
+            insights['algorithm_performance_history'][alg].append(performance)
+
+        # Learn optimal cluster patterns
+        if clustering_results.get('best_algorithm'):
+            best_alg = clustering_results['best_algorithm']
+            best_clusters = clustering_results.get(best_alg, {}).get('n_clusters', 0)
+            if best_clusters > 0:
+                insights['optimal_cluster_counts'].append(best_clusters)
+
+    def _adjust_exploration_strategy(self):
+        """Adjust exploration strategy based on accumulated learning."""
+        if len(self.successful_patterns) > 0:
+            # Learn from successful patterns
+            avg_quality = np.mean([p['quality'] for p in self.successful_patterns])
+            best_algorithms = [p['best_algorithm'] for p in self.successful_patterns]
+
+            # Update preferred algorithms based on success history
+            from collections import Counter
+            algorithm_frequency = Counter(best_algorithms)
+            self.preferred_algorithms = [alg for alg, _ in algorithm_frequency.most_common(3)]
+
+            print(f"[\033[94mLEARNING\033[0m] Progressive insights: avg_quality={avg_quality:.3f}")
+            print(f"[\033[94mLEARNING\033[0m] Preferred algorithms: {self.preferred_algorithms}")
+
+            # Adjust max iterations based on learning
+            if avg_quality > 0.7:
+                self.max_iterations = min(self.max_iterations, 30)  # Reduce if learning well
+                print(f"[\033[94mLEARNING\033[0m] High quality learning detected - reducing exploration to {self.max_iterations} iterations")
+            elif avg_quality < 0.4:
+                self.max_iterations = min(50, self.max_iterations + 10)  # Increase if struggling
+                print(f"[\033[94mLEARNING\033[0m] Low quality results - extending exploration to {self.max_iterations} iterations")
+
+    def get_learned_preferences(self) -> Dict[str, Any]:
+        """Get learned preferences for algorithm selection."""
+        if not hasattr(self, 'preferred_algorithms'):
+            self.preferred_algorithms = []
+
+        preferences = {
+            'preferred_algorithms': getattr(self, 'preferred_algorithms', []),
+            'algorithm_performance': self.knowledge_base.get('algorithm_preferences', {}),
+            'clustering_insights': self.knowledge_base.get('clustering_insights', {}),
+            'success_rate': len(self.successful_patterns) / max(1, len(self.exploration_history)),
+            'average_quality': np.mean([p['quality'] for p in self.successful_patterns]) if self.successful_patterns else 0.0
+        }
+
+        return preferences
 
     def _synthesize_exploration_knowledge(self, exploration_results: List[ExplorationResult]) -> Dict[str, Any]:
         """Synthesize final knowledge from all exploration iterations."""
@@ -579,6 +872,486 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
                 'average_quality': np.mean([r.quality_score for r in exploration_results]) if exploration_results else 0.0
             }
         }
+
+    async def _autonomous_algorithm_discovery(self, X_scaled: np.ndarray, iteration: int) -> List[Dict[str, Any]]:
+        """Agent autonomously discovers and suggests algorithms based on data characteristics."""
+        print(f"[\033[96mDISCOVERY\033[0m] Autonomous algorithm discovery for iteration {iteration}")
+
+        # Analyze data characteristics for algorithm selection
+        n_samples, n_features = X_scaled.shape
+        data_variance = np.var(X_scaled, axis=0).mean()
+        data_sparsity = np.sum(X_scaled == 0) / (n_samples * n_features)
+
+        # Build context for LLM-based algorithm suggestion
+        data_context = f"""
+        Data characteristics for autonomous algorithm selection:
+        - Sample count: {n_samples}
+        - Feature count: {n_features}
+        - Data variance: {data_variance:.4f}
+        - Sparsity: {data_sparsity:.4f}
+        - Domain: Semiconductor timing analysis (setup/hold violations, process corners)
+        - Iteration: {iteration}
+        """
+
+        # Use learned preferences if available
+        preferences = self.get_learned_preferences()
+        if preferences['preferred_algorithms'] and iteration > 2:
+            # Blend autonomous discovery with learned preferences
+            discovery_prompt = f"""
+            {data_context}
+
+            Based on previous exploration, these algorithms showed promise: {preferences['preferred_algorithms']}
+            Average quality so far: {preferences['average_quality']:.3f}
+
+            Autonomously suggest 2-4 clustering algorithms that would be most suitable for this semiconductor timing data.
+            Consider: data density patterns, outlier handling, parameter sensitivity, scalability.
+
+            Respond with algorithm suggestions in this format:
+            ALGORITHM: [name]
+            REASONING: [why this algorithm suits the data characteristics]
+            PARAMETERS: [suggested parameter ranges or adaptive approaches]
+            """
+        else:
+            # Pure autonomous discovery without learned bias
+            discovery_prompt = f"""
+            {data_context}
+
+            As an autonomous ML agent analyzing semiconductor timing data, suggest 3-5 clustering algorithms
+            that would be most effective for discovering timing violation patterns and process corner variations.
+
+            Consider the data characteristics and provide diverse algorithmic approaches.
+
+            Respond with algorithm suggestions in this format:
+            ALGORITHM: [name]
+            REASONING: [why this algorithm suits the data characteristics]
+            PARAMETERS: [suggested parameter ranges or adaptive approaches]
+            """
+
+        try:
+            response = await self._query_llm(discovery_prompt)
+            print(f"[\033[96mDISCOVERY\033[0m] LLM algorithm suggestions: {response[:200]}...")
+
+            # Parse LLM response into algorithm configurations
+            algorithm_suggestions = self._parse_algorithm_suggestions(response, X_scaled)
+
+            print(f"[\033[96mDISCOVERY\033[0m] Discovered {len(algorithm_suggestions)} algorithms to explore")
+            for i, alg in enumerate(algorithm_suggestions):
+                print(f"[\033[96mDISCOVERY\033[0m] {i+1}. {alg['name']}: {alg['reasoning'][:100]}...")
+
+            return algorithm_suggestions
+
+        except Exception as e:
+            print(f"[\033[96mDISCOVERY\033[0m] LLM discovery failed: {e}, using fallback autonomous selection")
+            return self._fallback_algorithm_discovery(X_scaled, iteration)
+
+    def _parse_algorithm_suggestions(self, llm_response: str, X_scaled: np.ndarray) -> List[Dict[str, Any]]:
+        """Parse LLM response into executable algorithm configurations."""
+        algorithms = []
+        n_samples = len(X_scaled)
+
+        # Extract algorithm suggestions from LLM response
+        import re
+        algorithm_blocks = re.split(r'ALGORITHM:', llm_response)[1:]  # Skip first empty split
+
+        for block in algorithm_blocks:
+            try:
+                lines = block.strip().split('\n')
+                name = lines[0].strip().lower()
+
+                # Extract reasoning if present
+                reasoning_match = re.search(r'REASONING:\s*(.+)', block, re.IGNORECASE)
+                reasoning = reasoning_match.group(1).strip() if reasoning_match else "Autonomous selection"
+
+                # Map algorithm names to implementations
+                alg_config = self._map_algorithm_name_to_config(name, reasoning, n_samples)
+                if alg_config:
+                    algorithms.append(alg_config)
+
+            except Exception as e:
+                print(f"[\033[96mDISCOVERY\033[0m] Failed to parse algorithm block: {e}")
+                continue
+
+        # Ensure at least 2 algorithms for comparison
+        if len(algorithms) < 2:
+            algorithms.extend(self._fallback_algorithm_discovery(X_scaled, len(algorithms)))
+
+        return algorithms[:5]  # Limit to 5 algorithms per iteration
+
+    def _map_algorithm_name_to_config(self, name: str, reasoning: str, n_samples: int) -> Dict[str, Any]:
+        """Map algorithm name from LLM to executable configuration."""
+        name = name.lower().replace('-', '').replace('_', '').replace(' ', '')
+
+        algorithm_map = {
+            'kmeans': {
+                'name': 'kmeans',
+                'reasoning': reasoning,
+                'adaptive_params': True,
+                'k_range': [3, min(20, n_samples//100)]
+            },
+            'dbscan': {
+                'name': 'dbscan',
+                'reasoning': reasoning,
+                'adaptive_params': True,
+                'eps_method': 'knn'
+            },
+            'gmm': {
+                'name': 'gmm',
+                'reasoning': reasoning,
+                'adaptive_params': True,
+                'n_components_range': [2, min(15, n_samples//150)]
+            },
+            'spectralclustering': {
+                'name': 'spectral',
+                'reasoning': reasoning,
+                'adaptive_params': True,
+                'n_clusters_range': [3, min(12, n_samples//200)]
+            },
+            'agglomerativeclustering': {
+                'name': 'agglomerative',
+                'reasoning': reasoning,
+                'adaptive_params': True,
+                'linkage_options': ['ward', 'complete', 'average']
+            },
+            'birch': {
+                'name': 'birch',
+                'reasoning': reasoning,
+                'adaptive_params': True,
+                'threshold_range': [0.1, 1.0]
+            }
+        }
+
+        # Fuzzy matching for common variations
+        for key in algorithm_map:
+            if key in name or name in key:
+                return algorithm_map[key]
+
+        return None
+
+    def _fallback_algorithm_discovery(self, X_scaled: np.ndarray, existing_count: int) -> List[Dict[str, Any]]:
+        """Fallback autonomous algorithm selection when LLM fails."""
+        print(f"[\033[96mDISCOVERY\033[0m] Using fallback autonomous discovery")
+
+        n_samples, n_features = X_scaled.shape
+
+        # Intelligent fallback based on data characteristics
+        algorithms = []
+
+        if existing_count == 0:
+            # Start with density-based for timing outliers
+            algorithms.append({
+                'name': 'dbscan',
+                'reasoning': 'Autonomous selection: density-based for outlier detection in timing data',
+                'adaptive_params': True,
+                'eps_method': 'knn'
+            })
+
+        if len(algorithms) < 2:
+            # Add centroid-based for process corner clustering
+            algorithms.append({
+                'name': 'kmeans',
+                'reasoning': 'Autonomous selection: centroid-based for process corner grouping',
+                'adaptive_params': True,
+                'k_range': [3, min(15, n_samples//100)]
+            })
+
+        if len(algorithms) < 3:
+            # Add probabilistic for timing distribution modeling
+            algorithms.append({
+                'name': 'gmm',
+                'reasoning': 'Autonomous selection: probabilistic modeling for timing distributions',
+                'adaptive_params': True,
+                'n_components_range': [2, min(12, n_samples//150)]
+            })
+
+        return algorithms
+
+    async def _autonomous_algorithm_execution(self, alg_config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Agent autonomously executes and evaluates a specific algorithm configuration."""
+        algorithm_name = alg_config['name']
+        print(f"[\033[93mEXECUTE\033[0m] Autonomous execution: {algorithm_name}")
+        print(f"[\033[93mEXECUTE\033[0m] Reasoning: {alg_config['reasoning']}")
+
+        try:
+            if algorithm_name == 'kmeans':
+                return await self._autonomous_kmeans_execution(alg_config, X_scaled)
+            elif algorithm_name == 'dbscan':
+                return await self._autonomous_dbscan_execution(alg_config, X_scaled)
+            elif algorithm_name == 'gmm':
+                return await self._autonomous_gmm_execution(alg_config, X_scaled)
+            elif algorithm_name == 'spectral':
+                return await self._autonomous_spectral_execution(alg_config, X_scaled)
+            elif algorithm_name == 'agglomerative':
+                return await self._autonomous_agglomerative_execution(alg_config, X_scaled)
+            elif algorithm_name == 'birch':
+                return await self._autonomous_birch_execution(alg_config, X_scaled)
+            else:
+                print(f"[\033[93mEXECUTE\033[0m] Unknown algorithm: {algorithm_name}")
+                return {'algorithm': algorithm_name, 'success': False, 'error': 'Unknown algorithm'}
+
+        except Exception as e:
+            print(f"[\033[93mEXECUTE\033[0m] Execution failed for {algorithm_name}: {e}")
+            return {
+                'algorithm': algorithm_name,
+                'success': False,
+                'error': str(e),
+                'reasoning': alg_config['reasoning']
+            }
+
+    async def _autonomous_kmeans_execution(self, config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Autonomous KMeans execution with adaptive parameter selection."""
+        from sklearn.cluster import KMeans
+
+        if config.get('adaptive_params', False):
+            k_range = config.get('k_range', [3, 10])
+            best_k = await self._find_optimal_k_autonomous(X_scaled, k_range)
+        else:
+            best_k = config.get('n_clusters', 5)
+
+        print(f"[\033[93mEXECUTE\033[0m] KMeans with k={best_k}")
+
+        kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(X_scaled)
+
+        silhouette_score = self._safe_silhouette_score(X_scaled, labels)
+        n_clusters = len(np.unique(labels))
+
+        return {
+            'algorithm': 'kmeans',
+            'success': True,
+            'labels': labels,
+            'n_clusters': n_clusters,
+            'silhouette_score': silhouette_score,
+            'reasoning': config['reasoning'],
+            'parameters': {'n_clusters': best_k}
+        }
+
+    async def _autonomous_dbscan_execution(self, config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Autonomous DBSCAN execution with adaptive parameter selection."""
+        from sklearn.cluster import DBSCAN
+        from sklearn.neighbors import NearestNeighbors
+
+        if config.get('adaptive_params', False):
+            # Autonomous parameter selection using k-NN
+            print(f"[\033[93mEXECUTE\033[0m] DBSCAN adaptive parameter selection")
+            k = min(10, len(X_scaled) // 100)
+            neighbors = NearestNeighbors(n_neighbors=k)
+            neighbors_fit = neighbors.fit(X_scaled)
+            distances, indices = neighbors_fit.kneighbors(X_scaled)
+            distances = np.sort(distances[:, k-1], axis=0)
+
+            # Find elbow point for eps
+            knee_idx = len(distances) // 2
+            eps = distances[knee_idx]
+            eps = max(0.1, min(eps, 2.0))  # Reasonable bounds
+            min_samples = max(5, k)
+        else:
+            eps = config.get('eps', 0.5)
+            min_samples = config.get('min_samples', 5)
+
+        print(f"[\033[93mEXECUTE\033[0m] DBSCAN with eps={eps:.3f}, min_samples={min_samples}")
+
+        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+        labels = dbscan.fit_predict(X_scaled)
+
+        n_clusters = len(np.unique(labels[labels != -1]))
+        n_outliers = np.sum(labels == -1)
+        outlier_ratio = n_outliers / len(labels)
+
+        # Conservative validation for timing data
+        if outlier_ratio > 0.5 or n_clusters > len(X_scaled) // 10:
+            print(f"[\033[93mEXECUTE\033[0m] DBSCAN results suspicious, applying conservative fallback")
+            eps = eps * 1.5  # Increase eps to reduce clusters
+            min_samples = min_samples + 2
+            dbscan_conservative = DBSCAN(eps=eps, min_samples=min_samples)
+            labels = dbscan_conservative.fit_predict(X_scaled)
+            n_clusters = len(np.unique(labels[labels != -1]))
+            n_outliers = np.sum(labels == -1)
+            outlier_ratio = n_outliers / len(labels)
+
+        silhouette_score = self._safe_silhouette_score(X_scaled, labels) if n_clusters > 1 else 0.0
+
+        return {
+            'algorithm': 'dbscan',
+            'success': True,
+            'labels': labels,
+            'n_clusters': n_clusters,
+            'n_outliers': n_outliers,
+            'outlier_ratio': outlier_ratio,
+            'silhouette_score': silhouette_score,
+            'reasoning': config['reasoning'],
+            'parameters': {'eps': eps, 'min_samples': min_samples}
+        }
+
+    async def _autonomous_gmm_execution(self, config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Autonomous GMM execution with adaptive component selection."""
+        from sklearn.mixture import GaussianMixture
+
+        if config.get('adaptive_params', False):
+            n_range = config.get('n_components_range', [2, 10])
+            best_n = await self._find_optimal_gmm_components_autonomous(X_scaled, n_range)
+        else:
+            best_n = config.get('n_components', 5)
+
+        print(f"[\033[93mEXECUTE\033[0m] GMM with n_components={best_n}")
+
+        gmm = GaussianMixture(n_components=best_n, random_state=42)
+        labels = gmm.fit_predict(X_scaled)
+
+        silhouette_score = self._safe_silhouette_score(X_scaled, labels)
+        n_clusters = len(np.unique(labels))
+
+        return {
+            'algorithm': 'gmm',
+            'success': True,
+            'labels': labels,
+            'n_clusters': n_clusters,
+            'silhouette_score': silhouette_score,
+            'aic': gmm.aic(X_scaled),
+            'bic': gmm.bic(X_scaled),
+            'reasoning': config['reasoning'],
+            'parameters': {'n_components': best_n}
+        }
+
+    async def _autonomous_spectral_execution(self, config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Autonomous Spectral Clustering execution."""
+        from sklearn.cluster import SpectralClustering
+
+        if config.get('adaptive_params', False):
+            n_range = config.get('n_clusters_range', [3, 10])
+            best_n = await self._find_optimal_k_autonomous(X_scaled, n_range)
+        else:
+            best_n = config.get('n_clusters', 5)
+
+        print(f"[\033[93mEXECUTE\033[0m] Spectral with n_clusters={best_n}")
+
+        spectral = SpectralClustering(n_clusters=best_n, random_state=42)
+        labels = spectral.fit_predict(X_scaled)
+
+        silhouette_score = self._safe_silhouette_score(X_scaled, labels)
+        n_clusters = len(np.unique(labels))
+
+        return {
+            'algorithm': 'spectral',
+            'success': True,
+            'labels': labels,
+            'n_clusters': n_clusters,
+            'silhouette_score': silhouette_score,
+            'reasoning': config['reasoning'],
+            'parameters': {'n_clusters': best_n}
+        }
+
+    async def _autonomous_agglomerative_execution(self, config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Autonomous Agglomerative Clustering execution."""
+        from sklearn.cluster import AgglomerativeClustering
+
+        if config.get('adaptive_params', False):
+            linkage_options = config.get('linkage_options', ['ward', 'complete'])
+            best_linkage = 'ward'  # Default for timing data
+            best_n = await self._find_optimal_k_autonomous(X_scaled, [3, 12])
+        else:
+            best_linkage = config.get('linkage', 'ward')
+            best_n = config.get('n_clusters', 5)
+
+        print(f"[\033[93mEXECUTE\033[0m] Agglomerative with n_clusters={best_n}, linkage={best_linkage}")
+
+        agglomerative = AgglomerativeClustering(n_clusters=best_n, linkage=best_linkage)
+        labels = agglomerative.fit_predict(X_scaled)
+
+        silhouette_score = self._safe_silhouette_score(X_scaled, labels)
+        n_clusters = len(np.unique(labels))
+
+        return {
+            'algorithm': 'agglomerative',
+            'success': True,
+            'labels': labels,
+            'n_clusters': n_clusters,
+            'silhouette_score': silhouette_score,
+            'reasoning': config['reasoning'],
+            'parameters': {'n_clusters': best_n, 'linkage': best_linkage}
+        }
+
+    async def _autonomous_birch_execution(self, config: Dict[str, Any], X_scaled: np.ndarray) -> Dict[str, Any]:
+        """Autonomous BIRCH execution."""
+        from sklearn.cluster import Birch
+
+        if config.get('adaptive_params', False):
+            threshold_range = config.get('threshold_range', [0.1, 1.0])
+            threshold = np.mean(threshold_range)  # Start with middle value
+            n_clusters = None  # Let BIRCH determine
+        else:
+            threshold = config.get('threshold', 0.5)
+            n_clusters = config.get('n_clusters', None)
+
+        print(f"[\033[93mEXECUTE\033[0m] BIRCH with threshold={threshold}")
+
+        birch = Birch(threshold=threshold, n_clusters=n_clusters)
+        labels = birch.fit_predict(X_scaled)
+
+        silhouette_score = self._safe_silhouette_score(X_scaled, labels)
+        n_clusters_found = len(np.unique(labels))
+
+        return {
+            'algorithm': 'birch',
+            'success': True,
+            'labels': labels,
+            'n_clusters': n_clusters_found,
+            'silhouette_score': silhouette_score,
+            'reasoning': config['reasoning'],
+            'parameters': {'threshold': threshold, 'n_clusters': n_clusters}
+        }
+
+    async def _find_optimal_k_autonomous(self, X_scaled: np.ndarray, k_range: List[int]) -> int:
+        """Autonomous optimal k selection using multiple criteria."""
+        from sklearn.cluster import KMeans
+
+        scores = []
+        k_min, k_max = k_range[0], k_range[1]
+        k_max = min(k_max, len(X_scaled) // 10)  # Reasonable upper bound
+
+        for k in range(k_min, k_max + 1):
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=5)
+            labels = kmeans.fit_predict(X_scaled)
+
+            # Combined scoring: silhouette + inertia balance
+            sil_score = self._safe_silhouette_score(X_scaled, labels)
+            inertia = kmeans.inertia_
+
+            # Penalize too many clusters for timing data
+            cluster_penalty = max(0, (k - 8) * 0.1)  # Penalize k > 8
+            combined_score = sil_score - cluster_penalty
+
+            scores.append((k, combined_score, sil_score))
+
+        # Select best k
+        best_k = max(scores, key=lambda x: x[1])[0]
+        return best_k
+
+    async def _find_optimal_gmm_components_autonomous(self, X_scaled: np.ndarray, n_range: List[int]) -> int:
+        """Autonomous optimal GMM components using BIC/AIC."""
+        from sklearn.mixture import GaussianMixture
+
+        n_min, n_max = n_range[0], n_range[1]
+        n_max = min(n_max, len(X_scaled) // 20)  # Conservative upper bound
+
+        scores = []
+        for n in range(n_min, n_max + 1):
+            try:
+                gmm = GaussianMixture(n_components=n, random_state=42)
+                gmm.fit(X_scaled)
+                bic = gmm.bic(X_scaled)
+                aic = gmm.aic(X_scaled)
+
+                # Prefer BIC for model selection (more conservative)
+                scores.append((n, -bic, -aic))  # Negative because we want to minimize
+            except Exception as e:
+                print(f"[\033[93mEXECUTE\033[0m] GMM failed for n={n}: {e}")
+                continue
+
+        if not scores:
+            return n_min
+
+        best_n = max(scores, key=lambda x: x[1])[0]
+        return best_n
 
     async def _autonomous_recovery(self, error: str) -> Dict[str, Any]:
         """Agent autonomously recovers from errors."""
@@ -843,7 +1616,7 @@ class AutonomousStrategySynthesizer:
                 'reasoning': f"Selected based on validation quality score: {best_score:.3f}",
                 'synthesis_timestamp': time.time()
             }
-            print(f"[\033[95mSYNTHESIS\033[0m] ✅ Best strategy: {strategy['algorithm']} (confidence: {best_score:.3f})")
+            print(f"[\033[95mSYNTHESIS\033[0m] [SUCCESS] Best strategy: {strategy['algorithm']} (confidence: {best_score:.3f})")
         else:
             # Fallback strategy
             strategy = {
@@ -853,7 +1626,7 @@ class AutonomousStrategySynthesizer:
                 'reasoning': 'Fallback strategy - no experiments passed validation',
                 'synthesis_timestamp': time.time()
             }
-            print(f"[\033[95mSYNTHESIS\033[0m] ⚠️  Using fallback strategy: {strategy['algorithm']}")
+            print(f"[\033[95mSYNTHESIS\033[0m] [WARN] Using fallback strategy: {strategy['algorithm']}")
 
         # Get autonomous strategy refinement from LLM
         print(f"[\033[95mSYNTHESIS\033[0m] Consulting LLM for strategy refinement...")
