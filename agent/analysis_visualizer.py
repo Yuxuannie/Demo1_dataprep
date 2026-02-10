@@ -270,80 +270,158 @@ class AnalysisVisualizer:
         <div class="plot-container">
         """
 
-        # Distribution comparison
-        html += self._create_distribution_comparison(numeric_data, selected_data)
-
-        # Coverage analysis
-        html += self._create_coverage_analysis(numeric_data, selected_data)
-
-        # Outlier preservation analysis
-        html += self._create_outlier_preservation(numeric_data, selected_data)
-
-        # Representative sample check
-        html += self._create_representativeness_check(numeric_data, selected_data)
+        # Create actual interactive plots instead of tables
+        html += self._create_distribution_comparison_plot(numeric_data, selected_data)
+        html += self._create_scatter_plot_comparison(numeric_data, selected_data)
+        html += self._create_box_plot_comparison(numeric_data, selected_data)
+        html += self._create_coverage_visualization(numeric_data, selected_data)
 
         html += "</div>"
         return html
 
-    def _create_distribution_comparison(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
-        """Compare distributions between original and selected data"""
-        html = """
-        <h3>Distribution Preservation</h3>
-        <table style="border-collapse: collapse; width: 100%;">
-        <tr>
-            <th style="border: 1px solid #ddd; padding: 8px;">Feature</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Original Mean±Std</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Selected Mean±Std</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Mean Diff</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Std Ratio</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Quality</th>
-        </tr>"""
+    def _create_distribution_comparison_plot(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Create distribution comparison plots using Plotly"""
+        import plotly.graph_objs as go
+        import plotly.io as pio
+        import random
 
-        for col in list(original.columns[:10]):
-            orig_mean, orig_std = original[col].mean(), original[col].std()
-            sel_mean, sel_std = selected[col].mean(), selected[col].std()
+        # Get first few features for plotting
+        features = list(original.columns[:4])  # Limit to 4 features for readability
 
-            mean_diff = abs(sel_mean - orig_mean) / orig_std if orig_std > 0 else 0
-            std_ratio = sel_std / orig_std if orig_std > 0 else 1
+        html = '<h3>Distribution Comparison</h3>'
 
-            # Quality assessment
-            if mean_diff < 0.2 and 0.8 <= std_ratio <= 1.2:
-                quality = "EXCELLENT"
-                color = "#d4edda"
-            elif mean_diff < 0.5 and 0.6 <= std_ratio <= 1.4:
-                quality = "GOOD"
-                color = "#fff3cd"
-            else:
-                quality = "POOR"
-                color = "#f8d7da"
+        for i, col in enumerate(features):
+            plot_id = f'distribution_plot_{i}_{random.randint(1000, 9999)}'
 
-            html += f"""
-            <tr style="background-color: {color};">
-                <td style="border: 1px solid #ddd; padding: 8px;"><strong>{col[:15]}</strong></td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{orig_mean:.3f}±{orig_std:.3f}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{sel_mean:.3f}±{sel_std:.3f}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{mean_diff:.3f}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{std_ratio:.3f}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;"><strong>{quality}</strong></td>
-            </tr>"""
+            # Create histogram overlays
+            fig = go.Figure()
 
-        html += "</table>"
+            # Original data histogram
+            fig.add_trace(go.Histogram(
+                x=original[col],
+                name='Original',
+                opacity=0.7,
+                nbinsx=20,
+                marker_color='blue'
+            ))
+
+            # Selected data histogram
+            fig.add_trace(go.Histogram(
+                x=selected[col],
+                name='Selected',
+                opacity=0.7,
+                nbinsx=20,
+                marker_color='red'
+            ))
+
+            fig.update_layout(
+                title=f'Distribution Comparison: {col}',
+                xaxis_title=col,
+                yaxis_title='Frequency',
+                barmode='overlay',
+                showlegend=True,
+                height=300,
+                margin=dict(l=40, r=40, t=60, b=40)
+            )
+
+            plot_html = pio.to_html(fig, include_plotlyjs=False, div_id=plot_id)
+            html += f'<div class="plot-container">{plot_html}</div>'
+
         return html
 
-    def _create_coverage_analysis(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
-        """Analyze feature space coverage"""
-        html = """
-        <h3>Feature Space Coverage</h3>
-        <table style="border-collapse: collapse; width: 100%;">
-        <tr>
-            <th style="border: 1px solid #ddd; padding: 8px;">Feature</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Original Range</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Selected Range</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Coverage %</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Missing Extremes</th>
-        </tr>"""
+    def _create_scatter_plot_comparison(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Create scatter plot to show selection distribution"""
+        import plotly.graph_objs as go
+        import plotly.io as pio
+        import random
 
-        for col in list(original.columns[:10]):
+        if len(original.columns) < 2:
+            return '<h3>Scatter Plot</h3><p>Need at least 2 features for scatter plot.</p>'
+
+        col1, col2 = original.columns[0], original.columns[1]
+        plot_id = f'scatter_plot_{random.randint(1000, 9999)}'
+
+        fig = go.Figure()
+
+        # Original data points
+        fig.add_trace(go.Scatter(
+            x=original[col1],
+            y=original[col2],
+            mode='markers',
+            name='Original',
+            marker=dict(color='lightblue', size=4, opacity=0.6)
+        ))
+
+        # Selected data points
+        fig.add_trace(go.Scatter(
+            x=selected[col1],
+            y=selected[col2],
+            mode='markers',
+            name='Selected',
+            marker=dict(color='red', size=8, opacity=0.8)
+        ))
+
+        fig.update_layout(
+            title=f'Sample Distribution: {col1} vs {col2}',
+            xaxis_title=col1,
+            yaxis_title=col2,
+            showlegend=True,
+            height=400,
+            margin=dict(l=40, r=40, t=60, b=40)
+        )
+
+        plot_html = pio.to_html(fig, include_plotlyjs=False, div_id=plot_id)
+        return f'<h3>Sample Distribution</h3><div class="plot-container">{plot_html}</div>'
+
+    def _create_box_plot_comparison(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Create box plot comparison to show distribution statistics"""
+        import plotly.graph_objs as go
+        import plotly.io as pio
+        import random
+
+        features = list(original.columns[:4])  # Limit to 4 features
+        plot_id = f'box_plot_{random.randint(1000, 9999)}'
+
+        fig = go.Figure()
+
+        for col in features:
+            # Original data box plot
+            fig.add_trace(go.Box(
+                y=original[col],
+                name=f'{col} (Original)',
+                boxmean=True,
+                marker_color='lightblue'
+            ))
+
+            # Selected data box plot
+            fig.add_trace(go.Box(
+                y=selected[col],
+                name=f'{col} (Selected)',
+                boxmean=True,
+                marker_color='red'
+            ))
+
+        fig.update_layout(
+            title='Box Plot Comparison: Original vs Selected',
+            yaxis_title='Values',
+            showlegend=True,
+            height=400,
+            margin=dict(l=40, r=40, t=60, b=40)
+        )
+
+        plot_html = pio.to_html(fig, include_plotlyjs=False, div_id=plot_id)
+        return f'<h3>Statistical Distribution Comparison</h3><div class="plot-container">{plot_html}</div>'
+
+    def _create_coverage_visualization(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Create coverage visualization using bar chart"""
+        import plotly.graph_objs as go
+        import plotly.io as pio
+        import random
+
+        features = list(original.columns[:6])  # Limit to 6 features for readability
+        coverage_data = []
+
+        for col in features:
             orig_min, orig_max = original[col].min(), original[col].max()
             sel_min, sel_max = selected[col].min(), selected[col].max()
 
@@ -351,146 +429,55 @@ class AnalysisVisualizer:
             sel_range = sel_max - sel_min
             coverage = (sel_range / orig_range) * 100 if orig_range > 0 else 100
 
-            # Check if extremes are missing
-            missing_low = sel_min > orig_min + 0.1 * orig_range
-            missing_high = sel_max < orig_max - 0.1 * orig_range
-            missing_extremes = []
-            if missing_low:
-                missing_extremes.append("LOW")
-            if missing_high:
-                missing_extremes.append("HIGH")
+            coverage_data.append({
+                'feature': col,
+                'coverage': coverage
+            })
 
-            missing_text = ", ".join(missing_extremes) if missing_extremes else "None"
+        plot_id = f'coverage_plot_{random.randint(1000, 9999)}'
 
-            html += f"""
-            <tr>
-                <td style="border: 1px solid #ddd; padding: 8px;"><strong>{col[:15]}</strong></td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{orig_min:.3f} to {orig_max:.3f}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{sel_min:.3f} to {sel_max:.3f}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{coverage:.1f}%</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{missing_text}</td>
-            </tr>"""
+        fig = go.Figure()
 
-        html += "</table>"
-        return html
+        colors = ['green' if x['coverage'] >= 80 else 'orange' if x['coverage'] >= 60 else 'red'
+                  for x in coverage_data]
 
-    def _create_outlier_preservation(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
-        """Check if outliers are preserved in selection"""
-        from scipy import stats
+        fig.add_trace(go.Bar(
+            x=[x['feature'] for x in coverage_data],
+            y=[x['coverage'] for x in coverage_data],
+            marker_color=colors,
+            text=[f"{x['coverage']:.1f}%" for x in coverage_data],
+            textposition='auto'
+        ))
 
-        html = """
-        <h3>Outlier Preservation Analysis</h3>
-        <table style="border-collapse: collapse; width: 100%;">
-        <tr>
-            <th style="border: 1px solid #ddd; padding: 8px;">Feature</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Original Outliers</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Selected Outliers</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Preservation Rate</th>
-            <th style="border: 1px solid #ddd; padding: 8px;">Assessment</th>
-        </tr>"""
+        fig.update_layout(
+            title='Feature Range Coverage',
+            xaxis_title='Features',
+            yaxis_title='Coverage Percentage',
+            yaxis_range=[0, 100],
+            height=300,
+            margin=dict(l=40, r=40, t=60, b=40)
+        )
 
-        for col in list(original.columns[:8]):
-            # Use Z-score method to identify outliers
-            orig_z_scores = np.abs(stats.zscore(original[col]))
-            sel_z_scores = np.abs(stats.zscore(selected[col]))
+        # Add horizontal line at 80% (good coverage threshold)
+        fig.add_hline(y=80, line_dash="dash", line_color="gray",
+                      annotation_text="Good Coverage Threshold")
 
-            orig_outliers = (orig_z_scores > 2.5).sum()
-            sel_outliers = (sel_z_scores > 2.5).sum()
+        plot_html = pio.to_html(fig, include_plotlyjs=False, div_id=plot_id)
 
-            # Calculate expected outliers in selection
-            selection_ratio = len(selected) / len(original)
-            expected_outliers = orig_outliers * selection_ratio
-
-            preservation_rate = (sel_outliers / expected_outliers) if expected_outliers > 0 else 1.0
-
-            if preservation_rate >= 0.8:
-                assessment = "GOOD"
-                color = "#d4edda"
-            elif preservation_rate >= 0.5:
-                assessment = "FAIR"
-                color = "#fff3cd"
-            else:
-                assessment = "POOR"
-                color = "#f8d7da"
-
-            html += f"""
-            <tr style="background-color: {color};">
-                <td style="border: 1px solid #ddd; padding: 8px;"><strong>{col[:15]}</strong></td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{orig_outliers}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{sel_outliers}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">{preservation_rate:.1%}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;"><strong>{assessment}</strong></td>
-            </tr>"""
-
-        html += "</table>"
-        return html
-
-    def _create_representativeness_check(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
-        """Overall representativeness assessment"""
+        # Add summary
         selection_ratio = len(selected) / len(original)
+        avg_coverage = np.mean([x['coverage'] for x in coverage_data])
 
-        html = f"""
-        <h3>Representativeness Summary</h3>
+        summary_html = f"""
         <div class="summary">
-            <p><strong>Selection Ratio:</strong> {selection_ratio:.1%} ({len(selected)} of {len(original)} samples)</p>
-        """
-
-        # Calculate overall quality metrics
-        total_features = len(original.columns)
-        quality_scores = []
-
-        for col in original.columns[:15]:  # Limit to prevent performance issues
-            if original[col].dtype in ['int64', 'float64']:
-                orig_mean, orig_std = original[col].mean(), original[col].std()
-                sel_mean = selected[col].mean()
-
-                if orig_std > 0:
-                    mean_diff = abs(sel_mean - orig_mean) / orig_std
-                    quality_scores.append(1 - min(mean_diff, 1))
-
-        avg_quality = np.mean(quality_scores) if quality_scores else 0.5
-
-        if avg_quality > 0.8:
-            overall_assessment = "EXCELLENT - Highly representative sample"
-            color = "#d4edda"
-        elif avg_quality > 0.6:
-            overall_assessment = "GOOD - Representative sample with minor deviations"
-            color = "#fff3cd"
-        elif avg_quality > 0.4:
-            overall_assessment = "FAIR - Some features may be under/over-represented"
-            color = "#ffeaa7"
-        else:
-            overall_assessment = "POOR - Sample may not be representative"
-            color = "#f8d7da"
-
-        html += f"""
-            <p><strong>Overall Quality Score:</strong> {avg_quality:.3f}</p>
-            <div style="background-color: {color}; padding: 10px; border-radius: 5px; margin: 10px 0;">
-                <strong>Assessment:</strong> {overall_assessment}
-            </div>
-        """
-
-        # Recommendations
-        html += """
-            <p><strong>Recommendations:</strong></p>
-            <ul>
-        """
-
-        if avg_quality < 0.6:
-            html += "<li>Consider increasing sample size for better representation</li>"
-        if selection_ratio < 0.05:
-            html += "<li>Very small sample - results may not generalize well</li>"
-        elif selection_ratio > 0.3:
-            html += "<li>Large sample selected - consider if smaller subset would suffice</li>"
-
-        html += """
-            <li>Check distribution plots above for feature-specific issues</li>
-            <li>Verify outlier preservation matches your analysis needs</li>
-            </ul>
+            <p><strong>Selection Summary:</strong></p>
+            <p>Selected {len(selected)} samples out of {len(original)} total ({selection_ratio:.1%})</p>
+            <p>Average feature coverage: {avg_coverage:.1f}%</p>
+            <p>Coverage interpretation: {'Excellent' if avg_coverage >= 80 else 'Good' if avg_coverage >= 60 else 'Needs improvement'}</p>
         </div>
         """
 
-        return html
+        return f'<h3>Feature Coverage Analysis</h3><div class="plot-container">{plot_html}</div>{summary_html}'
 
     def open_in_browser(self, html_file_path: str):
         """Open the HTML file in the default browser"""

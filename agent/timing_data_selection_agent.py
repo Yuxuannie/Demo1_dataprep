@@ -309,8 +309,11 @@ class RealIntelligenceExperimentExecutor:
             # Merge base and optimized parameters
             final_params = {**base_params, **optimized_params}
 
+            # Filter parameters to only include valid sklearn parameters
+            clean_params = self._filter_sklearn_parameters(final_params, algorithm_name)
+
             # Execute clustering
-            result = self._run_clustering_algorithm(X_scaled, algorithm_name, final_params)
+            result = self._run_clustering_algorithm(X_scaled, algorithm_name, clean_params)
 
             execution_time = time.time() - start_time
 
@@ -484,9 +487,8 @@ Answer with specific strategy recommendations based on the numerical evidence ab
         print(f"\n[PHASE 2] \033[36mLLM REASONING\033[0m ABOUT REAL DATA")
         if self.llm:
             llm_reasoning = self.llm_reason_about_data(exploration_results['data_characteristics'])
-            # Format the LLM reasoning for terminal display
-            formatted_reasoning = self._format_llm_response(llm_reasoning)
-            print(f"[LLM-REASONING] {formatted_reasoning}")
+            # Display unfolded LLM reasoning
+            self._display_unfolded_llm_reasoning(llm_reasoning)
         else:
             llm_reasoning = "Statistical analysis complete - proceeding with evidence-based strategy"
             print(f"[STATISTICAL-REASONING] LLM not available, using computed data characteristics for decisions")
@@ -725,6 +727,31 @@ Answer with specific strategy recommendations based on the numerical evidence ab
             cleaned += "."
 
         return cleaned
+
+    def _display_unfolded_llm_reasoning(self, llm_response: str):
+        """Display LLM reasoning in unfolded, readable format"""
+        if not llm_response:
+            print(f"[LLM-REASONING] No response received from LLM")
+            return
+
+        # Clean the response but keep structure
+        cleaned = llm_response.replace('**', '').replace('*', '').replace('#', '')
+
+        # Split into sentences for better readability
+        import re
+        sentences = re.split(r'[.!?]+', cleaned)
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        print(f"[LLM-REASONING] \033[36mDetailed Analysis:\033[0m")
+
+        # Display each key point on separate lines
+        for i, sentence in enumerate(sentences[:5]):  # Limit to 5 key points
+            if sentence:
+                print(f"   {i+1}. {sentence}.")
+
+        # If there are more sentences, show a summary
+        if len(sentences) > 5:
+            print(f"   ... (additional reasoning available)")
 
     def _assess_selection_quality(self, selected_indices: List[int], characteristics: Dict[str, Any]) -> Dict[str, Any]:
         """Assess quality of sample selection using statistical measures"""
@@ -1042,6 +1069,41 @@ Answer with specific strategy recommendations based on the numerical evidence ab
     def get_conversation_history(self) -> List[Dict[str, Any]]:
         """Get conversation history."""
         return self.conversation_history
+
+    def _filter_sklearn_parameters(self, parameters: Dict[str, Any], algorithm_name: str) -> Dict[str, Any]:
+        """Filter parameters to only include valid sklearn algorithm parameters"""
+
+        # Define valid parameters for each algorithm
+        valid_params = {
+            'KMeans': {
+                'n_clusters', 'init', 'n_init', 'max_iter', 'tol', 'random_state',
+                'copy_x', 'algorithm'
+            },
+            'DBSCAN': {
+                'eps', 'min_samples', 'metric', 'metric_params', 'algorithm',
+                'leaf_size', 'p', 'n_jobs'
+            },
+            'GaussianMixture': {
+                'n_components', 'covariance_type', 'tol', 'reg_covar',
+                'max_iter', 'n_init', 'init_params', 'weights_init',
+                'means_init', 'precisions_init', 'random_state', 'warm_start'
+            },
+            'AgglomerativeClustering': {
+                'n_clusters', 'linkage', 'metric', 'memory', 'connectivity',
+                'compute_full_tree', 'distance_threshold', 'compute_distances'
+            }
+        }
+
+        # Get valid parameter names for this algorithm
+        valid_param_names = valid_params.get(algorithm_name, set())
+
+        # Filter to only include valid parameters
+        filtered_params = {
+            key: value for key, value in parameters.items()
+            if key in valid_param_names
+        }
+
+        return filtered_params
 
     def handle_conversation(self, user_query: str) -> Dict[str, Any]:
         """Handle conversational questions about results without re-running selection."""
