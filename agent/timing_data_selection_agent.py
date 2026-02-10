@@ -1274,6 +1274,292 @@ Provide a technical explanation of the algorithms, approaches, and reasoning beh
 
         return success_count == total_tests
 
+    def parse_user_query(self, query: str) -> Dict[str, Any]:
+        """Parse natural language query with timing domain understanding."""
+        self._load_imports()
+
+        # Use the new classify_user_intent and parameter extraction
+        intent, params = self.classify_user_intent(query)
+
+        # Convert to expected format for backward compatibility
+        result = {
+            'selection_percentage': params.get('selection_percentage'),
+            'selection_criteria': 'uncertainty',  # Default to uncertainty sampling
+            'clustering_preference': params.get('preferred_algorithm'),
+            'additional_requirements': None,
+            'intent': intent.value
+        }
+
+        return result
+
+    def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
+        """Main workflow with timing domain expertise - compatibility layer for UI."""
+        self._load_imports()
+        print("\n" + "=" * 80)
+        print("AUTONOMOUS TIMING DATA SELECTION AGENT")
+        print("=" * 80)
+
+        self.add_message('user', user_query)
+
+        print("\nParsing timing engineer requirements...")
+        params = self.parse_user_query(user_query)
+
+        # Check if this is a conversational question first
+        intent, intent_params = self.classify_user_intent(user_query)
+
+        if intent in [UserIntent.QUESTION_ABOUT_RESULTS, UserIntent.EXPLAIN_METHODOLOGY] and len(self.conversation_history) > 0:
+            print("\n[CONVERSATIONAL] Detected follow-up question - providing contextual response")
+            return self.handle_conversation(user_query)
+
+        # Handle null percentage first - determine optimal percentage based on actual dataset size
+        if params.get('selection_percentage') is None:
+            # Need to load data first to determine size
+            temp_data = pd.read_csv(csv_path)
+            data_size = len(temp_data)
+            if data_size > 50000:
+                optimal_percentage = 3.0  # Large datasets need less percentage
+            elif data_size > 20000:
+                optimal_percentage = 5.0  # Medium datasets
+            else:
+                optimal_percentage = 8.0  # Smaller datasets can afford higher percentage
+
+            params['selection_percentage'] = optimal_percentage
+            print(f"No percentage specified. Data-driven selection: {optimal_percentage}% for {data_size:,} samples")
+
+        # Use the autonomous pipeline
+        print("\n[AUTONOMOUS] Running autonomous sample selection pipeline...")
+
+        try:
+            import asyncio
+
+            # Run the autonomous pipeline
+            autonomous_results = asyncio.run(
+                self.autonomous_sample_selection(csv_path, params['selection_percentage'])
+            )
+
+            # Convert autonomous results to expected format for UI compatibility
+            if 'error' in autonomous_results:
+                # Handle errors
+                result = {
+                    'observation': {'error': autonomous_results['error']},
+                    'strategy': {'algorithm': 'error'},
+                    'decision': {'error': True},
+                    'result': {
+                        'selected_indices': autonomous_results.get('selected_indices', []),
+                        'n_selected': len(autonomous_results.get('selected_indices', [])),
+                        'expected_cost_reduction': 'Error occurred',
+                        'algorithm': 'error'
+                    },
+                    'reasoning_log': self.reasoning_log,
+                    'conversation_history': self.conversation_history,
+                    'parsed_params': params,
+                    'autonomous_mode': True,
+                    'autonomous_results': autonomous_results
+                }
+            else:
+                # Successful results - convert format
+                selected_indices = autonomous_results.get('selected_indices', [])
+                final_strategy = autonomous_results.get('final_strategy', {})
+                quality_assessment = autonomous_results.get('quality_assessment', {})
+
+                result = {
+                    'observation': {
+                        'data_shape': getattr(self, 'current_data', pd.DataFrame()).shape,
+                        'target_percentage': params['selection_percentage'],
+                        'autonomous_exploration': autonomous_results.get('exploration_results', {}),
+                        'final_target_percentage': params['selection_percentage']
+                    },
+                    'strategy': {
+                        'algorithm': final_strategy.get('algorithm', 'autonomous'),
+                        'parameters': final_strategy.get('parameters', {}),
+                        'confidence': final_strategy.get('confidence', 0.0),
+                        'autonomous_strategy': final_strategy
+                    },
+                    'decision': {
+                        'selected_algorithm': final_strategy.get('algorithm', 'autonomous'),
+                        'reasoning': final_strategy.get('reasoning', 'Autonomous selection'),
+                        'autonomous_decision': True
+                    },
+                    'result': {
+                        'selected_indices': selected_indices,
+                        'n_selected': len(selected_indices),
+                        'expected_cost_reduction': f"Autonomous quality score: {quality_assessment.get('overall_quality', 0):.3f}",
+                        'algorithm': final_strategy.get('algorithm', 'autonomous'),
+                        'clusters': getattr(self, '_last_clusters', None),
+                        'quality_metrics': quality_assessment
+                    },
+                    'reasoning_log': self.reasoning_log,
+                    'conversation_history': self.conversation_history,
+                    'parsed_params': params,
+                    'autonomous_mode': True,
+                    'autonomous_results': autonomous_results
+                }
+
+            print("\n" + "=" * 80)
+            print("AUTONOMOUS TIMING SELECTION COMPLETE")
+            print("=" * 80)
+            print(f"Selected {result['result']['n_selected']}/{len(getattr(self, 'current_data', pd.DataFrame()))} samples")
+            print(f"Algorithm: {result['result']['algorithm']}")
+            print(f"Quality: {result['result']['expected_cost_reduction']}")
+
+            return result
+
+        except Exception as e:
+            print(f"[ERROR] Autonomous pipeline failed: {e}")
+            # Fallback result
+            return {
+                'observation': {'error': str(e)},
+                'strategy': {'algorithm': 'error'},
+                'decision': {'error': True},
+                'result': {
+                    'selected_indices': [],
+                    'n_selected': 0,
+                    'expected_cost_reduction': f'Error: {e}',
+                    'algorithm': 'error'
+                },
+                'reasoning_log': self.reasoning_log,
+                'conversation_history': self.conversation_history,
+                'parsed_params': params,
+                'autonomous_mode': True,
+                'error': str(e)
+            }
+
+    def generate_interactive_dashboard(self, df: pd.DataFrame, selected_indices: List[int],
+                                       clusters: Optional[np.ndarray] = None,
+                                       export_html: bool = False) -> Dict[str, Any]:
+        """Generate interactive dashboard (compatibility method)."""
+        try:
+            print(f"[DASHBOARD] Generating interactive visualization for {len(selected_indices)} selected samples")
+
+            # Store current data for autonomous methods to access
+            self.current_data = df
+
+            # Create a simple dashboard result
+            dashboard_data = {
+                'summary': {
+                    'total_samples': len(df),
+                    'selected_count': len(selected_indices),
+                    'selection_percentage': (len(selected_indices) / len(df)) * 100 if len(df) > 0 else 0,
+                    'num_clusters': len(np.unique(clusters)) if clusters is not None else 0
+                },
+                'selected_indices': selected_indices,
+                'clusters': clusters.tolist() if clusters is not None else None,
+                'timestamp': pd.Timestamp.now().isoformat()
+            }
+
+            if export_html:
+                # Create basic HTML content
+                html_content = self._create_basic_html_dashboard(dashboard_data, df, selected_indices)
+
+                # Save to file
+                import tempfile
+                timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"timing_dashboard_{len(selected_indices)}samples_{timestamp}.html"
+                filepath = os.path.join(os.getcwd(), filename)
+
+                with open(filepath, 'w') as f:
+                    f.write(html_content)
+
+                dashboard_data['exported_file'] = filepath
+                print(f"[EXPORT] Dashboard exported to: {filepath}")
+
+            return {
+                'dashboard_data': dashboard_data,
+                'success': True,
+                'message': f"Dashboard generated for {len(selected_indices)} samples"
+            }
+
+        except Exception as e:
+            print(f"[ERROR] Dashboard generation failed: {e}")
+            return {
+                'dashboard_data': None,
+                'success': False,
+                'message': f"Dashboard generation failed: {e}",
+                'error': str(e)
+            }
+
+    def _create_basic_html_dashboard(self, dashboard_data: Dict, df: pd.DataFrame, selected_indices: List[int]) -> str:
+        """Create basic HTML dashboard."""
+        summary = dashboard_data.get('summary', {})
+
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Timing Data Selection Dashboard</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .header {{ background-color: #1f4e79; color: white; padding: 20px; text-align: center; }}
+        .summary {{ background-color: #f8f9fa; padding: 15px; margin: 20px 0; border-radius: 5px; }}
+        .metric {{ display: inline-block; margin: 10px 20px; text-align: center; }}
+        .metric-value {{ font-size: 2em; font-weight: bold; color: #1f4e79; }}
+        .metric-label {{ font-size: 0.9em; color: #666; }}
+        .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Autonomous Timing Data Selection Dashboard</h1>
+        <p>Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    </div>
+
+    <div class="summary">
+        <h2>Selection Summary</h2>
+        <div class="metric">
+            <div class="metric-value">{summary.get('selected_count', 0)}</div>
+            <div class="metric-label">Samples Selected</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">{summary.get('total_samples', 0)}</div>
+            <div class="metric-label">Total Samples</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">{summary.get('selection_percentage', 0):.1f}%</div>
+            <div class="metric-label">Selection Percentage</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">{summary.get('num_clusters', 0)}</div>
+            <div class="metric-label">Clusters Found</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>Autonomous Pipeline Results</h3>
+        <p>This dashboard was generated using the autonomous timing data selection agent.</p>
+        <p>Selected indices: {len(selected_indices)} samples from {len(df)} total samples</p>
+        <p>Algorithm used: Autonomous selection with uncertainty sampling</p>
+    </div>
+
+    <div class="section">
+        <h3>Data Overview</h3>
+        <p>Dataset shape: {df.shape}</p>
+        <p>Numeric columns: {len(df.select_dtypes(include=[np.number]).columns)}</p>
+    </div>
+</body>
+</html>
+"""
+        return html_content
+
+    def _extract_cluster_count(self, text: str) -> int:
+        """Extract cluster count from LLM response."""
+        import re
+        try:
+            matches = re.findall(r'(\d+)\s*cluster', text, re.IGNORECASE)
+            if matches:
+                return int(matches[0])
+
+            matches = re.findall(r'k\s*=\s*(\d+)', text)
+            if matches:
+                return int(matches[0])
+
+            matches = re.findall(r'(?:optimal|best|choose).*?(\d+)', text, re.IGNORECASE)
+            if matches:
+                return int(matches[0])
+        except:
+            pass
+
+        return 3  # Default cluster count
+
 
 # LLM Initialization Functions
 def initialize_timing_llm():
