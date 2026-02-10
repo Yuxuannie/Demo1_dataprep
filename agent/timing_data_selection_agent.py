@@ -179,7 +179,8 @@ class RealIntelligenceExplorationEngine:
 class RealIntelligenceExperimentExecutor:
     """Executes experiments based on data characteristics, not random choices"""
 
-    def __init__(self):
+    def __init__(self, verbose=True):
+        self.verbose = verbose
         self.algorithm_selector = IntelligentAlgorithmSelector()
         self.parameter_optimizer = IntelligentParameterOptimizer()
         self.execution_history = []
@@ -191,13 +192,24 @@ class RealIntelligenceExperimentExecutor:
         # Select algorithms based on data characteristics
         recommended_algorithms = self.algorithm_selector.select_optimal_algorithm(characteristics)
 
+        if self.verbose:
+            print(f"   \033[35mOBSERVATION:\033[0m Selected {len(recommended_algorithms)} algorithms for testing")
+
         experiment_results = []
 
-        for algorithm_config in recommended_algorithms:
+        for i, algorithm_config in enumerate(recommended_algorithms):
+            if self.verbose:
+                print(f"   \033[33mACTION:\033[0m Testing algorithm {i+1}/{len(recommended_algorithms)}: {algorithm_config['name']}")
+
             result = await self._execute_single_experiment(
                 algorithm_config, characteristics, data
             )
             experiment_results.append(result)
+
+            if self.verbose:
+                score = result.get('performance_score', 0)
+                status = "SUCCESS" if result.get('success') else "FAILED"
+                print(f"   \033[32mRESULT:\033[0m {algorithm_config['name']}: score={score:.3f} ({status})")
 
             # Update algorithm performance history
             if result.get('success'):
@@ -206,6 +218,10 @@ class RealIntelligenceExperimentExecutor:
                     result.get('performance_score', 0),
                     characteristics
                 )
+
+        if self.verbose:
+            best_score = max([r.get('performance_score', 0) for r in experiment_results])
+            print(f"   \033[32mCOMPLETED:\033[0m Algorithm testing complete. Best score: {best_score:.3f}")
 
         return experiment_results
 
@@ -323,7 +339,7 @@ class TimingDataSelectionAgent:
 
         # Real intelligence components
         self.exploration_engine = RealIntelligenceExplorationEngine(verbose=verbose)
-        self.experiment_executor = RealIntelligenceExperimentExecutor()
+        self.experiment_executor = RealIntelligenceExperimentExecutor(verbose=verbose)
         self.evidence_sampler = EvidenceBasedSampler()
         self.insights_memory = ConcreteInsightsMemory()
 
@@ -422,12 +438,25 @@ Answer with specific strategy recommendations based on the numerical evidence ab
         best_experiment = max(experiment_results, key=lambda x: x.get('performance_score', 0)) if experiment_results else None
 
         if best_experiment and best_experiment.get('success'):
+            if self.verbose:
+                print(f"   \033[35mOBSERVATION:\033[0m Best algorithm: {best_experiment.get('algorithm_name', 'unknown')}")
+                print(f"   \033[33mACTION:\033[0m Applying evidence-based sampling strategy")
+
             strategy = exploration_results['optimal_strategy']
             sampling_result = self.evidence_sampler.select_samples(
                 self.current_data, target_percentage, strategy,
                 exploration_results['data_characteristics']
             )
+
+            if self.verbose:
+                method = sampling_result.get('method_used', 'unknown')
+                count = len(sampling_result.get('selected_indices', []))
+                print(f"   \033[32mRESULT:\033[0m Selected {count} samples using {method}")
         else:
+            if self.verbose:
+                print(f"   \033[31mERROR:\033[0m No successful experiments, falling back to random sampling")
+                print(f"   \033[33mACTION:\033[0m Applying fallback random sampling")
+
             # Fallback to simple random sampling
             target_count = max(1, int(len(self.current_data) * target_percentage / 100))
             sampling_result = {
@@ -436,47 +465,139 @@ Answer with specific strategy recommendations based on the numerical evidence ab
                 'reasoning': 'Fallback due to experiment failures'
             }
 
+            if self.verbose:
+                print(f"   \033[32mRESULT:\033[0m Selected {target_count} samples using fallback random sampling")
+
         # Phase 5: Quality Assessment and Learning
         print(f"\n[PHASE 5] PERFORMANCE ANALYSIS AND LEARNING")
+
+        if self.verbose:
+            print(f"   \033[33mACTION:\033[0m Assessing selection quality...")
+
         quality_metrics = self._assess_selection_quality(
             sampling_result['selected_indices'], exploration_results['data_characteristics']
         )
 
+        if self.verbose:
+            score = quality_metrics.get('overall_score', 0)
+            print(f"   \033[32mRESULT:\033[0m Quality assessment complete. Overall score: {score:.3f}")
+
         # Store concrete insights for learning
-        iteration_id = self.insights_memory.store_iteration_insights(
-            exploration_results['data_characteristics'],
-            exploration_results['optimal_strategy'],
-            {'quality_metrics': quality_metrics, 'experiment_results': experiment_results}
-        )
+        try:
+            if self.verbose:
+                print(f"   \033[33mACTION:\033[0m Storing insights and building final result...")
 
-        total_time = time.time() - start_time
+            iteration_id = self.insights_memory.store_iteration_insights(
+                exploration_results['data_characteristics'],
+                exploration_results['optimal_strategy'],
+                {'quality_metrics': quality_metrics, 'experiment_results': experiment_results}
+            )
 
-        final_result = {
-            'selected_indices': sampling_result['selected_indices'],
-            'selection_method': sampling_result['method_used'],
-            'data_analysis': exploration_results,
-            'experiment_results': experiment_results,
-            'quality_metrics': quality_metrics,
-            'execution_time': total_time,
-            'insights_stored': iteration_id,
-            'reasoning_chain': self._build_reasoning_chain(exploration_results, experiment_results, sampling_result),
-            'llm_reasoning': llm_reasoning if self.llm else None,
-            'success': True
-        }
+            total_time = time.time() - start_time
+
+            final_result = {
+                'selected_indices': sampling_result['selected_indices'],
+                'selection_method': sampling_result.get('method_used', 'unknown'),
+                'data_analysis': exploration_results,
+                'experiment_results': experiment_results,
+                'quality_metrics': quality_metrics,
+                'execution_time': total_time,
+                'insights_stored': iteration_id,
+                'reasoning_chain': self._build_reasoning_chain(exploration_results, experiment_results, sampling_result),
+                'llm_reasoning': llm_reasoning if self.llm else None,
+                'success': True
+            }
+
+            if self.verbose:
+                print(f"   \033[32mCOMPLETED:\033[0m Result building successful")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"   \033[31mERROR:\033[0m Result building failed: {e}")
+
+            # Create minimal result in case of error
+            final_result = {
+                'selected_indices': sampling_result.get('selected_indices', []),
+                'selection_method': sampling_result.get('method_used', 'error'),
+                'execution_time': time.time() - start_time,
+                'success': False,
+                'error': str(e)
+            }
 
         self.last_results = final_result
         self.analysis_iterations += 1
 
-        print(f"\n[COMPLETE] Selected {len(sampling_result['selected_indices'])} samples in {total_time:.2f}s")
-        print(f"[METHOD] {sampling_result['method_used']}")
-        print(f"[QUALITY] Score: {quality_metrics.get('overall_score', 0):.3f}")
+        # Print analysis summary
+        if final_result.get('success'):
+            selected_count = len(final_result['selected_indices'])
+            method = final_result['selection_method']
+            score = final_result['quality_metrics'].get('overall_score', 0)
+            print(f"\n[COMPLETE] Selected {selected_count} samples in {final_result['execution_time']:.2f}s")
+            print(f"[METHOD] {method}")
+            print(f"[QUALITY] Score: {score:.3f}")
+
+            # Add analysis insights summary
+            if self.verbose:
+                self._print_analysis_summary(final_result)
+        else:
+            print(f"\n[ERROR] Analysis failed: {final_result.get('error', 'Unknown error')}")
 
         return final_result
+
+    def _print_analysis_summary(self, result: Dict[str, Any]):
+        """Print a summary of the analysis results for user inspection"""
+        print(f"\n\033[36mANALYSIS SUMMARY:\033[0m")
+
+        # Data characteristics summary
+        data_char = result['data_analysis']['data_characteristics']
+
+        # Basic stats
+        basic_stats = data_char.get('basic_stats', {})
+        print(f"  Dataset: {basic_stats.get('n_samples', 0)} samples, {basic_stats.get('n_features', 0)} features")
+
+        # Clustering potential
+        clustering = data_char.get('clustering_potential', {})
+        hopkins = clustering.get('hopkins_statistic', 0)
+        optimal_k = clustering.get('optimal_cluster_count', 0)
+        print(f"  Clustering: Hopkins={hopkins:.3f}, Optimal k={optimal_k}")
+
+        # Outliers
+        outliers = data_char.get('outlier_analysis', {})
+        outlier_ratio = outliers.get('global_outlier_ratio', 0)
+        print(f"  Outliers: {outlier_ratio:.1%} of data")
+
+        # Correlations
+        corr = data_char.get('correlation_analysis', {})
+        max_corr = corr.get('max_correlation', 0)
+        print(f"  Correlations: Max correlation = {max_corr:.3f}")
+
+        # Selection quality breakdown
+        quality = result['quality_metrics']
+        print(f"\n\033[32mSELECTION QUALITY:\033[0m")
+        print(f"  Overall Score: {quality.get('overall_score', 0):.3f}")
+
+        # Feature coverage if available
+        if 'mean_feature_coverage' in quality:
+            coverage = quality['mean_feature_coverage']
+            print(f"  Feature Coverage: {coverage:.1%}")
+
+        # Distribution preservation if available
+        if 'distribution_preservation' in quality:
+            preservation = quality['distribution_preservation']
+            print(f"  Distribution Preservation: {preservation:.3f}")
+
+        print(f"\n\033[33mRECOMMENDATION:\033[0m")
+        if hopkins > 0.7:
+            print("  Strong clustering detected - stratified sampling recommended")
+        elif outlier_ratio > 0.15:
+            print("  High outlier presence - outlier-preserving sampling recommended")
+        else:
+            print("  Uniform sampling appears suitable for this dataset")
 
     def _assess_selection_quality(self, selected_indices: List[int], characteristics: Dict[str, Any]) -> Dict[str, Any]:
         """Assess quality of sample selection using statistical measures"""
 
-        if not selected_indices or not self.current_data is not None:
+        if not selected_indices or self.current_data is None:
             return {'overall_score': 0.0, 'error': 'Invalid selection or data'}
 
         numeric_data = self.current_data.select_dtypes(include=[np.number])

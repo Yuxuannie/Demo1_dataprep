@@ -93,18 +93,19 @@ def initialize_agent():
 
         # Try to import LLM functions for enhanced reasoning
         try:
-            from agent.timing_data_selection_agent_original_FAKE import initialize_timing_llm, test_ollama_connection
+            from agent.llm_integration import initialize_timing_llm, test_ollama_connection, LLMInputAdapter
 
             # Test Ollama connection for enhanced LLM reasoning
-            if test_ollama_connection():
-                llm = initialize_timing_llm()
-                print("[INFO] LLM connected - will use for high-level reasoning with real data")
+            base_llm = initialize_timing_llm()
+            if base_llm:
+                llm = LLMInputAdapter(base_llm)  # Wrap for compatibility
+                print("[INFO] Ollama LLM connected - will use for high-level reasoning with real data")
             else:
                 llm = None
-                print("[INFO] LLM not available - using statistical analysis only")
-        except:
+                print("[INFO] Ollama LLM not available - using statistical analysis only")
+        except Exception as e:
             llm = None
-            print("[INFO] LLM functions not available - using statistical analysis only")
+            print(f"[INFO] LLM integration not available: {e} - using statistical analysis only")
 
         # Real intelligence agent with optional LLM reasoning
         agent = TimingDataSelectionAgent(llm=llm, verbose=True)
