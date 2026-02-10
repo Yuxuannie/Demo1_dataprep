@@ -395,6 +395,41 @@ class RealIntelligenceExperimentExecutor:
 
         return result
 
+    def _filter_sklearn_parameters(self, parameters: Dict[str, Any], algorithm_name: str) -> Dict[str, Any]:
+        """Filter parameters to only include valid sklearn algorithm parameters"""
+
+        # Define valid parameters for each algorithm
+        valid_params = {
+            'KMeans': {
+                'n_clusters', 'init', 'n_init', 'max_iter', 'tol', 'random_state',
+                'copy_x', 'algorithm'
+            },
+            'DBSCAN': {
+                'eps', 'min_samples', 'metric', 'metric_params', 'algorithm',
+                'leaf_size', 'p', 'n_jobs'
+            },
+            'GaussianMixture': {
+                'n_components', 'covariance_type', 'tol', 'reg_covar',
+                'max_iter', 'n_init', 'init_params', 'weights_init',
+                'means_init', 'precisions_init', 'random_state', 'warm_start'
+            },
+            'AgglomerativeClustering': {
+                'n_clusters', 'linkage', 'metric', 'memory', 'connectivity',
+                'compute_full_tree', 'distance_threshold', 'compute_distances'
+            }
+        }
+
+        # Get valid parameter names for this algorithm
+        valid_param_names = valid_params.get(algorithm_name, set())
+
+        # Filter to only include valid parameters
+        filtered_params = {
+            key: value for key, value in parameters.items()
+            if key in valid_param_names
+        }
+
+        return filtered_params
+
 
 class TimingDataSelectionAgent:
     """Main agent with real intelligence - no fake components"""
@@ -1069,41 +1104,6 @@ Answer with specific strategy recommendations based on the numerical evidence ab
     def get_conversation_history(self) -> List[Dict[str, Any]]:
         """Get conversation history."""
         return self.conversation_history
-
-    def _filter_sklearn_parameters(self, parameters: Dict[str, Any], algorithm_name: str) -> Dict[str, Any]:
-        """Filter parameters to only include valid sklearn algorithm parameters"""
-
-        # Define valid parameters for each algorithm
-        valid_params = {
-            'KMeans': {
-                'n_clusters', 'init', 'n_init', 'max_iter', 'tol', 'random_state',
-                'copy_x', 'algorithm'
-            },
-            'DBSCAN': {
-                'eps', 'min_samples', 'metric', 'metric_params', 'algorithm',
-                'leaf_size', 'p', 'n_jobs'
-            },
-            'GaussianMixture': {
-                'n_components', 'covariance_type', 'tol', 'reg_covar',
-                'max_iter', 'n_init', 'init_params', 'weights_init',
-                'means_init', 'precisions_init', 'random_state', 'warm_start'
-            },
-            'AgglomerativeClustering': {
-                'n_clusters', 'linkage', 'metric', 'memory', 'connectivity',
-                'compute_full_tree', 'distance_threshold', 'compute_distances'
-            }
-        }
-
-        # Get valid parameter names for this algorithm
-        valid_param_names = valid_params.get(algorithm_name, set())
-
-        # Filter to only include valid parameters
-        filtered_params = {
-            key: value for key, value in parameters.items()
-            if key in valid_param_names
-        }
-
-        return filtered_params
 
     def handle_conversation(self, user_query: str) -> Dict[str, Any]:
         """Handle conversational questions about results without re-running selection."""

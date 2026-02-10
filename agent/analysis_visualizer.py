@@ -281,9 +281,12 @@ class AnalysisVisualizer:
 
     def _create_distribution_comparison_plot(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
         """Create distribution comparison plots using Plotly"""
-        import plotly.graph_objs as go
-        import plotly.io as pio
-        import random
+        try:
+            import plotly.graph_objs as go
+            import plotly.io as pio
+            import random
+        except ImportError:
+            return self._create_distribution_comparison_fallback(original, selected)
 
         # Get first few features for plotting
         features = list(original.columns[:4])  # Limit to 4 features for readability
@@ -331,9 +334,12 @@ class AnalysisVisualizer:
 
     def _create_scatter_plot_comparison(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
         """Create scatter plot to show selection distribution"""
-        import plotly.graph_objs as go
-        import plotly.io as pio
-        import random
+        try:
+            import plotly.graph_objs as go
+            import plotly.io as pio
+            import random
+        except ImportError:
+            return self._create_scatter_plot_fallback(original, selected)
 
         if len(original.columns) < 2:
             return '<h3>Scatter Plot</h3><p>Need at least 2 features for scatter plot.</p>'
@@ -375,9 +381,12 @@ class AnalysisVisualizer:
 
     def _create_box_plot_comparison(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
         """Create box plot comparison to show distribution statistics"""
-        import plotly.graph_objs as go
-        import plotly.io as pio
-        import random
+        try:
+            import plotly.graph_objs as go
+            import plotly.io as pio
+            import random
+        except ImportError:
+            return self._create_box_plot_fallback(original, selected)
 
         features = list(original.columns[:4])  # Limit to 4 features
         plot_id = f'box_plot_{random.randint(1000, 9999)}'
@@ -414,9 +423,12 @@ class AnalysisVisualizer:
 
     def _create_coverage_visualization(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
         """Create coverage visualization using bar chart"""
-        import plotly.graph_objs as go
-        import plotly.io as pio
-        import random
+        try:
+            import plotly.graph_objs as go
+            import plotly.io as pio
+            import random
+        except ImportError:
+            return self._create_coverage_visualization_fallback(original, selected)
 
         features = list(original.columns[:6])  # Limit to 6 features for readability
         coverage_data = []
@@ -478,6 +490,177 @@ class AnalysisVisualizer:
         """
 
         return f'<h3>Feature Coverage Analysis</h3><div class="plot-container">{plot_html}</div>{summary_html}'
+
+    def _create_distribution_comparison_fallback(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Fallback using matplotlib when plotly is not available"""
+        import matplotlib.pyplot as plt
+        import base64
+        import io
+
+        features = list(original.columns[:4])  # Limit to 4 features
+        html = '<h3>Distribution Comparison (Matplotlib)</h3>'
+
+        for col in features:
+            fig, ax = plt.subplots(figsize=(8, 5))
+
+            # Create histogram overlays
+            ax.hist(original[col], bins=20, alpha=0.7, label='Original', color='blue')
+            ax.hist(selected[col], bins=20, alpha=0.7, label='Selected', color='red')
+
+            ax.set_xlabel(col)
+            ax.set_ylabel('Frequency')
+            ax.set_title(f'Distribution Comparison: {col}')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            # Save plot to base64 string
+            buffer = io.BytesIO()
+            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+            buffer.seek(0)
+            image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+            plt.close(fig)
+
+            # Add to HTML
+            html += f'<div class="plot-container"><img src="data:image/png;base64,{image_base64}" style="max-width:100%;height:auto;"></div>'
+
+        return html
+
+    def _create_scatter_plot_fallback(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Fallback scatter plot using matplotlib when plotly is not available"""
+        if len(original.columns) < 2:
+            return '<h3>Scatter Plot</h3><p>Need at least 2 features for scatter plot.</p>'
+
+        import matplotlib.pyplot as plt
+        import base64
+        import io
+
+        col1, col2 = original.columns[0], original.columns[1]
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # Original data points
+        ax.scatter(original[col1], original[col2],
+                  alpha=0.6, s=20, color='lightblue', label='Original')
+
+        # Selected data points
+        ax.scatter(selected[col1], selected[col2],
+                  alpha=0.8, s=50, color='red', label='Selected')
+
+        ax.set_xlabel(col1)
+        ax.set_ylabel(col2)
+        ax.set_title(f'Sample Distribution: {col1} vs {col2}')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Save plot to base64 string
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        plt.close(fig)
+
+        return f'<h3>Sample Distribution (Matplotlib)</h3><div class="plot-container"><img src="data:image/png;base64,{image_base64}" style="max-width:100%;height:auto;"></div>'
+
+    def _create_box_plot_fallback(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Fallback box plot using matplotlib when plotly is not available"""
+        import matplotlib.pyplot as plt
+        import base64
+        import io
+
+        features = list(original.columns[:4])  # Limit to 4 features
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        box_data = []
+        labels = []
+
+        for col in features:
+            box_data.extend([original[col], selected[col]])
+            labels.extend([f'{col}\n(Original)', f'{col}\n(Selected)'])
+
+        bp = ax.boxplot(box_data, labels=labels, patch_artist=True)
+
+        # Color the boxes
+        colors = ['lightblue', 'red'] * len(features)
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+
+        ax.set_title('Box Plot Comparison: Original vs Selected')
+        ax.set_ylabel('Values')
+        ax.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+
+        # Save plot to base64 string
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        plt.close(fig)
+
+        return f'<h3>Statistical Distribution Comparison (Matplotlib)</h3><div class="plot-container"><img src="data:image/png;base64,{image_base64}" style="max-width:100%;height:auto;"></div>'
+
+    def _create_coverage_visualization_fallback(self, original: pd.DataFrame, selected: pd.DataFrame) -> str:
+        """Fallback coverage visualization using matplotlib when plotly is not available"""
+        import matplotlib.pyplot as plt
+        import base64
+        import io
+
+        features = list(original.columns[:6])  # Limit to 6 features
+        coverage_data = []
+
+        for col in features:
+            orig_min, orig_max = original[col].min(), original[col].max()
+            sel_min, sel_max = selected[col].min(), selected[col].max()
+
+            orig_range = orig_max - orig_min
+            sel_range = sel_max - sel_min
+            coverage = (sel_range / orig_range) * 100 if orig_range > 0 else 100
+            coverage_data.append(coverage)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Create bar colors based on coverage quality
+        colors = ['green' if x >= 80 else 'orange' if x >= 60 else 'red' for x in coverage_data]
+
+        bars = ax.bar(features, coverage_data, color=colors, alpha=0.7)
+
+        # Add percentage labels on bars
+        for bar, coverage in zip(bars, coverage_data):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 1,
+                   f'{coverage:.1f}%', ha='center', va='bottom')
+
+        ax.set_title('Feature Range Coverage')
+        ax.set_xlabel('Features')
+        ax.set_ylabel('Coverage Percentage')
+        ax.set_ylim(0, 100)
+        ax.axhline(y=80, color='gray', linestyle='--', alpha=0.7, label='Good Coverage Threshold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+
+        # Save plot to base64 string
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        plt.close(fig)
+
+        # Add summary
+        selection_ratio = len(selected) / len(original)
+        avg_coverage = np.mean(coverage_data) if coverage_data else 0
+
+        summary_html = f'''
+        <div class="summary">
+            <p><strong>Selection Summary:</strong></p>
+            <p>Selected {len(selected)} samples out of {len(original)} total ({selection_ratio:.1%})</p>
+            <p>Average feature coverage: {avg_coverage:.1f}%</p>
+            <p>Coverage interpretation: {'Excellent' if avg_coverage >= 80 else 'Good' if avg_coverage >= 60 else 'Needs improvement'}</p>
+        </div>
+        '''
+
+        return f'<h3>Feature Coverage Analysis (Matplotlib)</h3><div class="plot-container"><img src="data:image/png;base64,{image_base64}" style="max-width:100%;height:auto;"></div>{summary_html}'
 
     def open_in_browser(self, html_file_path: str):
         """Open the HTML file in the default browser"""
