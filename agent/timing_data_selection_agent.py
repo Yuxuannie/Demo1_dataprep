@@ -373,15 +373,19 @@ class AutonomousExplorationEngine:
                         'correlations': np.corrcoef(X.T).tolist() if X.shape[1] > 1 else [[1.0]]
                     }
 
-                    # INTELLIGENT SAMPLING: Context-aware sampling based on agent's goal
+                    # DATA-DRIVEN SAMPLING: Analyze first, then sample intelligently
                     if len(X_scaled) > 5000:
-                        sampling_strategy = self._determine_sampling_strategy(self.current_thought, self.current_action)
-                        print(f"[\033[93mINTELLIGENT\033[0m] Large dataset detected ({len(X_scaled)} samples)")
-                        print(f"[\033[93mINTELLIGENT\033[0m] Sampling strategy: {sampling_strategy}")
+                        print(f"[\033[93mANALYZE\033[0m] Large dataset detected ({len(X_scaled)} samples)")
+                        print(f"[\033[93mANALYZE\033[0m] Performing data analysis before sampling...")
 
-                        X_sample, sample_indices = self._smart_sample(X_scaled, 5000, sampling_strategy, self.current_thought, self.current_action)
+                        # Analyze data characteristics FIRST
+                        data_insights = self._analyze_data_characteristics(X_scaled, feature_stats)
+                        self.data_insights = data_insights  # Store for algorithm selection
+
+                        # Use analysis results to determine sampling
+                        X_sample, sample_indices = self._data_driven_sampling(X_scaled, 5000, data_insights)
                         sample_mode = True
-                        print(f"[\033[93mINTELLIGENT\033[0m] Sampled {len(X_sample)} points using {sampling_strategy} strategy")
+                        print(f"[\033[93mSAMPLE\033[0m] Sampled {len(X_sample)} points based on data analysis")
                     else:
                         X_sample = X_scaled
                         sample_mode = False
@@ -390,12 +394,17 @@ class AutonomousExplorationEngine:
                     clustering_results = {}
                     print(f"[\033[93mEXECUTE\033[0m] Agent autonomously discovering and generating clustering strategies...")
 
-                    # Let the agent decide what algorithms to try based on data characteristics
-                    algorithm_suggestions = await self._autonomous_algorithm_discovery(X_sample, iteration)
+                    # REAL INTELLIGENCE: Algorithm selection based on actual data analysis
+                    if hasattr(self, 'data_insights') and self.data_insights:
+                        data_insights = self.data_insights  # Use stored insights
+                    else:
+                        data_insights = data_insights  # From earlier analysis
+
+                    algorithm_suggestions = self._intelligent_algorithm_selection(X_sample, data_insights, iteration)
 
                     # PERFORMANCE: Limit to 3 algorithms per iteration for speed
                     algorithm_suggestions = algorithm_suggestions[:3]
-                    print(f"[\033[93mOPTIMIZE\033[0m] Testing {len(algorithm_suggestions)} algorithms for optimal performance")
+                    print(f"[\033[96mINTELLIGENCE\033[0m] Selected {len(algorithm_suggestions)} algorithms based on data analysis")
 
                     # Agent generates and tests algorithms autonomously
                     algorithm_scores = {}
@@ -1134,6 +1143,237 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         np.random.shuffle(selected_indices)
         return X_scaled[selected_indices], selected_indices
 
+    def _analyze_data_characteristics(self, X_scaled: np.ndarray, feature_stats: dict) -> dict:
+        """Analyze data characteristics to guide intelligent sampling."""
+        print(f"[\033[93mANALYZE\033[0m] Computing data characteristics...")
+
+        insights = {
+            'n_samples': len(X_scaled),
+            'n_features': X_scaled.shape[1],
+            'feature_variances': np.var(X_scaled, axis=0),
+            'correlation_matrix': np.corrcoef(X_scaled.T) if X_scaled.shape[1] > 1 else np.array([[1.0]]),
+            'data_density': None,
+            'outlier_percentage': None,
+            'cluster_hint': None
+        }
+
+        # Estimate data density using nearest neighbors
+        try:
+            from sklearn.neighbors import NearestNeighbors
+            sample_size = min(1000, len(X_scaled))
+            sample_idx = np.random.choice(len(X_scaled), size=sample_size, replace=False)
+            X_sample = X_scaled[sample_idx]
+
+            nbrs = NearestNeighbors(n_neighbors=5).fit(X_sample)
+            distances, _ = nbrs.kneighbors(X_sample)
+            avg_distance = np.mean(distances[:, 1:])  # Exclude self
+            insights['data_density'] = 1.0 / (1.0 + avg_distance)  # Higher = denser
+
+            # Estimate outlier percentage using simple statistics
+            feature_outliers = []
+            for i in range(X_scaled.shape[1]):
+                q75, q25 = np.percentile(X_scaled[:, i], [75, 25])
+                iqr = q75 - q25
+                outlier_mask = (X_scaled[:, i] < (q25 - 1.5 * iqr)) | (X_scaled[:, i] > (q75 + 1.5 * iqr))
+                feature_outliers.append(np.sum(outlier_mask))
+
+            insights['outlier_percentage'] = np.mean(feature_outliers) / len(X_scaled)
+
+            # Estimate natural cluster hint using variance
+            high_var_features = np.sum(insights['feature_variances'] > np.median(insights['feature_variances']))
+            if high_var_features > X_scaled.shape[1] * 0.6:
+                insights['cluster_hint'] = 'high_dimensional'
+            elif insights['data_density'] > 0.5:
+                insights['cluster_hint'] = 'dense_clusters'
+            else:
+                insights['cluster_hint'] = 'sparse_data'
+
+            print(f"[\033[93mANALYZE\033[0m] Data density: {insights['data_density']:.3f}")
+            print(f"[\033[93mANALYZE\033[0m] Outlier %: {insights['outlier_percentage']:.1%}")
+            print(f"[\033[93mANALYZE\033[0m] Cluster hint: {insights['cluster_hint']}")
+
+        except Exception as e:
+            print(f"[\033[93mANALYZE\033[0m] Analysis failed: {e}, using basic sampling")
+
+        return insights
+
+    def _data_driven_sampling(self, X_scaled: np.ndarray, target_size: int, data_insights: dict) -> tuple:
+        """Sample based on actual data characteristics, not random assumptions."""
+        try:
+            outlier_pct = data_insights.get('outlier_percentage', 0.1)
+            cluster_hint = data_insights.get('cluster_hint', 'random')
+
+            print(f"[\033[93mSAMPLE\033[0m] Strategy: {cluster_hint} (outliers: {outlier_pct:.1%})")
+
+            if cluster_hint == 'high_dimensional' and outlier_pct > 0.15:
+                # High-dimensional with outliers: balanced sampling
+                return self._balanced_sampling(X_scaled, target_size, outlier_ratio=0.3)
+            elif cluster_hint == 'dense_clusters':
+                # Dense data: stratified sampling to maintain structure
+                return self._stratified_sampling(X_scaled, target_size)
+            else:
+                # Default: representative sampling
+                return self._representative_sampling(X_scaled, target_size)
+
+        except Exception as e:
+            print(f"[\033[93mSAMPLE\033[0m] Data-driven sampling failed: {e}, using random")
+            indices = np.random.choice(len(X_scaled), size=target_size, replace=False)
+            return X_scaled[indices], indices
+
+    def _balanced_sampling(self, X_scaled: np.ndarray, target_size: int, outlier_ratio: float = 0.3) -> tuple:
+        """Balanced sampling with controlled outlier representation."""
+        # Use simple statistical outlier detection
+        outlier_scores = []
+        for i in range(X_scaled.shape[1]):
+            q75, q25 = np.percentile(X_scaled[:, i], [75, 25])
+            iqr = q75 - q25
+            outlier_score = np.maximum(
+                (X_scaled[:, i] - q75) / iqr,
+                (q25 - X_scaled[:, i]) / iqr
+            )
+            outlier_scores.append(np.maximum(0, outlier_score))
+
+        combined_outlier_score = np.mean(outlier_scores, axis=0)
+        outlier_threshold = np.percentile(combined_outlier_score, 85)
+
+        outlier_mask = combined_outlier_score > outlier_threshold
+        outlier_indices = np.where(outlier_mask)[0]
+        normal_indices = np.where(~outlier_mask)[0]
+
+        n_outliers = min(int(target_size * outlier_ratio), len(outlier_indices))
+        n_normal = target_size - n_outliers
+
+        selected_outliers = np.random.choice(outlier_indices, size=n_outliers, replace=False)
+        selected_normal = np.random.choice(normal_indices, size=min(n_normal, len(normal_indices)), replace=False)
+
+        selected_indices = np.concatenate([selected_outliers, selected_normal])
+        np.random.shuffle(selected_indices)
+
+        print(f"[\033[93mSAMPLE\033[0m] Balanced: {n_outliers} outliers + {len(selected_normal)} normal")
+        return X_scaled[selected_indices], selected_indices
+
+    def _representative_sampling(self, X_scaled: np.ndarray, target_size: int) -> tuple:
+        """Representative sampling maintaining data distribution."""
+        # Simple random sampling for now, but could be enhanced with more sophisticated methods
+        indices = np.random.choice(len(X_scaled), size=target_size, replace=False)
+        return X_scaled[indices], indices
+
+    def _intelligent_algorithm_selection(self, X_sample: np.ndarray, data_insights: dict, iteration: int) -> List[Dict[str, Any]]:
+        """REAL INTELLIGENCE: Select algorithms based on actual data characteristics."""
+        print(f"[\033[96mINTELLIGENCE\033[0m] Analyzing data to select optimal algorithms...")
+
+        algorithms = []
+
+        # Get data characteristics
+        n_samples = data_insights.get('n_samples', len(X_sample))
+        n_features = data_insights.get('n_features', X_sample.shape[1])
+        data_density = data_insights.get('data_density', 0.5)
+        outlier_pct = data_insights.get('outlier_percentage', 0.1)
+        cluster_hint = data_insights.get('cluster_hint', 'unknown')
+        feature_variances = data_insights.get('feature_variances', [])
+
+        # DECISION LOGIC BASED ON ACTUAL DATA
+        print(f"[\033[96mINTELLIGENCE\033[0m] Data facts: {n_samples} samples, {n_features} features")
+        print(f"[\033[96mINTELLIGENCE\033[0m] Density: {data_density:.3f}, Outliers: {outlier_pct:.1%}, Pattern: {cluster_hint}")
+
+        # Check correlation structure
+        corr_matrix = data_insights.get('correlation_matrix', np.eye(n_features))
+        high_corr_pairs = np.sum(np.abs(corr_matrix) > 0.7) - n_features  # Exclude diagonal
+        correlation_strength = high_corr_pairs / (n_features * (n_features - 1))
+
+        print(f"[\033[96mINTELLIGENCE\033[0m] High correlations: {correlation_strength:.1%} of feature pairs")
+
+        # ALGORITHM 1: Choose based on data density and outliers
+        if outlier_pct > 0.2:
+            # High outliers detected
+            algorithms.append({
+                'name': 'dbscan',
+                'reasoning': f'DBSCAN selected: {outlier_pct:.1%} outliers detected, density-based clustering can separate noise from clusters',
+                'adaptive_params': True,
+                'eps_method': 'knn'
+            })
+            print(f"[\033[96mINTELLIGENCE\033[0m] Choice 1: DBSCAN (outlier ratio {outlier_pct:.1%})")
+        else:
+            # Low outliers, use centroid-based
+            optimal_k = min(8, max(3, int(np.sqrt(n_samples / 100))))
+            algorithms.append({
+                'name': 'kmeans',
+                'reasoning': f'KMeans selected: Low outliers ({outlier_pct:.1%}), estimated {optimal_k} natural clusters from data size',
+                'adaptive_params': True,
+                'k_range': [max(2, optimal_k-2), optimal_k+3]
+            })
+            print(f"[\033[96mINTELLIGENCE\033[0m] Choice 1: KMeans (low outliers, estimated k={optimal_k})")
+
+        # ALGORITHM 2: Choose based on feature correlations and variance
+        if len(feature_variances) > 0:
+            variance_ratio = np.max(feature_variances) / np.mean(feature_variances) if np.mean(feature_variances) > 0 else 1
+            if correlation_strength > 0.3 and variance_ratio > 5:
+                # High correlation + high variance disparity
+                algorithms.append({
+                    'name': 'gmm',
+                    'reasoning': f'GMM selected: High feature correlation ({correlation_strength:.1%}) and variance disparity ({variance_ratio:.1f}x), suggests overlapping Gaussian clusters',
+                    'adaptive_params': True,
+                    'n_components_range': [2, min(8, max(3, int(n_samples/200)))]
+                })
+                print(f"[\033[96mINTELLIGENCE\033[0m] Choice 2: GMM (correlation: {correlation_strength:.1%}, variance ratio: {variance_ratio:.1f})")
+            elif n_features > 10 and data_density < 0.4:
+                # High-dimensional sparse data
+                algorithms.append({
+                    'name': 'agglomerative',
+                    'reasoning': f'Agglomerative selected: High-dimensional ({n_features}D) sparse data (density: {data_density:.3f}), hierarchical structure likely',
+                    'adaptive_params': True,
+                    'linkage_options': ['ward', 'complete']
+                })
+                print(f"[\033[96mINTELLIGENCE\033[0m] Choice 2: Agglomerative ({n_features}D sparse data)")
+            else:
+                # Default second choice
+                algorithms.append({
+                    'name': 'gmm',
+                    'reasoning': f'GMM selected: Moderate feature structure, can model soft clusters with {n_features} features',
+                    'adaptive_params': True,
+                    'n_components_range': [2, 6]
+                })
+                print(f"[\033[96mINTELLIGENCE\033[0m] Choice 2: GMM (default for moderate structure)")
+
+        # ALGORITHM 3: Choose based on iteration learning
+        if iteration > 1 and hasattr(self, 'algorithm_history'):
+            # Look at what worked before
+            best_previous = None
+            best_score = -1
+            for alg, scores in self.algorithm_history.items():
+                if scores and np.mean(scores[-2:]) > best_score:  # Last 2 attempts
+                    best_score = np.mean(scores[-2:])
+                    best_previous = alg
+
+            if best_previous and best_score > 0.15 and best_previous not in [a['name'] for a in algorithms]:
+                algorithms.append({
+                    'name': best_previous,
+                    'reasoning': f'{best_previous.upper()} selected: Previous iterations showed {best_score:.3f} score, building on successful approach',
+                    'adaptive_params': True
+                })
+                print(f"[\033[96mINTELLIGENCE\033[0m] Choice 3: {best_previous} (learning from iteration {iteration-1})")
+            else:
+                # Add exploratory algorithm
+                if 'spectral' not in [a['name'] for a in algorithms] and n_samples < 2000:  # Avoid spectral on large data
+                    algorithms.append({
+                        'name': 'spectral',
+                        'reasoning': f'Spectral selected: Exploratory analysis on moderate dataset ({n_samples} samples), can find non-convex clusters',
+                        'adaptive_params': True,
+                        'n_clusters_range': [3, 6]
+                    })
+                    print(f"[\033[96mINTELLIGENCE\033[0m] Choice 3: Spectral (exploration, {n_samples} samples)")
+
+        # Ensure we have at least 2 algorithms
+        if len(algorithms) < 2:
+            algorithms.append({
+                'name': 'kmeans',
+                'reasoning': f'KMeans added: Fallback reliable algorithm for {n_samples} samples',
+                'adaptive_params': True,
+                'k_range': [3, 8]
+            })
+
+        return algorithms
+
     def _build_penalty_context(self) -> str:
         """Build context string about algorithm penalties for LLM guidance."""
         if not self.algorithm_penalties and not self.banned_algorithms:
@@ -1518,8 +1758,33 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
 
         print(f"[\033[93mEXECUTE\033[0m] Spectral with n_clusters={best_n}")
 
-        spectral = SpectralClustering(n_clusters=best_n, random_state=42)
-        labels = spectral.fit_predict(X_scaled)
+        # SPEED FIX: Add constraints to prevent hanging
+        max_samples_for_spectral = min(1000, len(X_scaled))  # Limit for speed
+        if len(X_scaled) > max_samples_for_spectral:
+            sample_idx = np.random.choice(len(X_scaled), size=max_samples_for_spectral, replace=False)
+            X_spectral = X_scaled[sample_idx]
+            print(f"[\033[93mOPTIMIZE\033[0m] Spectral using {max_samples_for_spectral} samples to prevent timeout")
+        else:
+            X_spectral = X_scaled
+
+        spectral = SpectralClustering(
+            n_clusters=best_n,
+            random_state=42,
+            affinity='nearest_neighbors',  # Faster than RBF
+            n_neighbors=min(10, len(X_spectral)//10),  # Conservative neighbors
+            assign_labels='discretize'  # Faster than kmeans
+        )
+        labels_sample = spectral.fit_predict(X_spectral)
+
+        # Map back to full dataset if we sampled
+        if len(X_scaled) > max_samples_for_spectral:
+            # Assign all points to nearest cluster center
+            from sklearn.neighbors import NearestNeighbors
+            nn = NearestNeighbors(n_neighbors=1).fit(X_spectral)
+            _, nearest_indices = nn.kneighbors(X_scaled)
+            labels = labels_sample[nearest_indices.flatten()]
+        else:
+            labels = labels_sample
 
         silhouette_score = self._safe_silhouette_score(X_scaled, labels)
         n_clusters = len(np.unique(labels))
