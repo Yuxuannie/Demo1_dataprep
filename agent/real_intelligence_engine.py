@@ -22,8 +22,9 @@ warnings.filterwarnings('ignore')
 class DataCharacteristicsAnalyzer:
     """Performs deep statistical analysis of dataset characteristics"""
 
-    def __init__(self):
+    def __init__(self, verbose=True):
         self.analysis_cache = {}
+        self.verbose = verbose
 
     def analyze_dataset(self, data: pd.DataFrame) -> Dict[str, Any]:
         """Comprehensive statistical analysis of dataset"""
@@ -31,15 +32,26 @@ class DataCharacteristicsAnalyzer:
         if numeric_data.empty:
             return {'error': 'No numeric columns found'}
 
-        characteristics = {
-            'basic_stats': self._compute_basic_statistics(numeric_data),
-            'correlation_analysis': self._analyze_correlations(numeric_data),
-            'distribution_analysis': self._analyze_distributions(numeric_data),
-            'outlier_analysis': self._analyze_outliers(numeric_data),
-            'clustering_potential': self._assess_clustering_potential(numeric_data),
-            'feature_importance': self._analyze_feature_importance(numeric_data),
-            'dimensionality_assessment': self._assess_dimensionality(numeric_data)
-        }
+        if self.verbose:
+            print(f"   Analyzing {len(numeric_data)} samples with {len(numeric_data.columns)} features")
+
+        characteristics = {}
+
+        # Progress tracking for each analysis step
+        steps = [
+            ('basic_stats', self._compute_basic_statistics),
+            ('correlation_analysis', self._analyze_correlations),
+            ('distribution_analysis', self._analyze_distributions),
+            ('outlier_analysis', self._analyze_outliers),
+            ('clustering_potential', self._assess_clustering_potential),
+            ('feature_importance', self._analyze_feature_importance),
+            ('dimensionality_assessment', self._assess_dimensionality)
+        ]
+
+        for step_name, step_func in steps:
+            if self.verbose:
+                print(f"   Running {step_name.replace('_', ' ')}...")
+            characteristics[step_name] = step_func(numeric_data)
 
         return characteristics
 
@@ -136,13 +148,19 @@ class DataCharacteristicsAnalyzer:
         }
 
     def _assess_clustering_potential(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """Assess how suitable data is for clustering"""
+        """Assess how suitable data is for clustering (optimized for performance)"""
         X = StandardScaler().fit_transform(data)
 
-        # Hopkins statistic for clustering tendency
-        def hopkins_statistic(X, n_samples=min(200, len(X)//10)):
+        # Hopkins statistic for clustering tendency (faster version)
+        def hopkins_statistic(X, n_samples=min(100, max(10, len(X)//20))):
             if len(X) < 10:
                 return 0.5
+
+            # Use smaller sample for large datasets
+            if len(X) > 1000:
+                sample_size = min(500, len(X)//4)  # Use subset for large datasets
+                indices = np.random.choice(len(X), sample_size, replace=False)
+                X = X[indices]
 
             sample_indices = np.random.choice(len(X), n_samples, replace=False)
             X_sample = X[sample_indices]
@@ -160,21 +178,46 @@ class DataCharacteristicsAnalyzer:
 
         hopkins_stat = hopkins_statistic(X)
 
-        # Estimate optimal cluster count using elbow method
+        # Optimized cluster count estimation (much faster)
+        # Use smaller k range and fewer initializations for speed
+        max_k = min(6, len(data)//20, len(data)//5) if len(data) > 100 else min(4, len(data)//5)
+        k_range = range(2, max(3, max_k + 1))
+
+        # Use fewer initializations for speed
+        n_init = 3 if len(data) > 500 else 5
+
         inertias = []
         silhouette_scores = []
-        k_range = range(2, min(11, len(data)//10))
+
+        if self.verbose:
+            print(f"   Evaluating k-values: {list(k_range)} (n_init={n_init})")
 
         for k in k_range:
             if k >= len(data):
                 break
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-            labels = kmeans.fit_predict(X)
-            inertias.append(kmeans.inertia_)
-            if len(np.unique(labels)) > 1:
-                sil_score = silhouette_score(X, labels)
-                silhouette_scores.append(sil_score)
-            else:
+            try:
+                # Use fewer iterations for speed
+                kmeans = KMeans(n_clusters=k, random_state=42, n_init=n_init, max_iter=100)
+                labels = kmeans.fit_predict(X)
+                inertias.append(kmeans.inertia_)
+
+                if len(np.unique(labels)) > 1:
+                    # Calculate silhouette on subset for large datasets
+                    if len(X) > 1000:
+                        subset_indices = np.random.choice(len(X), 500, replace=False)
+                        sil_score = silhouette_score(X[subset_indices], labels[subset_indices])
+                    else:
+                        sil_score = silhouette_score(X, labels)
+                    silhouette_scores.append(sil_score)
+                else:
+                    silhouette_scores.append(-1)
+
+                if self.verbose:
+                    print(f"   k={k}: silhouette={silhouette_scores[-1]:.3f}")
+
+            except Exception as e:
+                if self.verbose:
+                    print(f"   k={k}: failed ({e})")
                 silhouette_scores.append(-1)
 
         # Find optimal k
@@ -212,24 +255,32 @@ class DataCharacteristicsAnalyzer:
         }
 
     def _assess_dimensionality(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """Assess dimensionality and need for reduction"""
+        """Assess dimensionality and need for reduction (optimized for performance)"""
         X = StandardScaler().fit_transform(data)
 
-        # PCA analysis
-        pca = PCA()
-        pca.fit(X)
+        # Use subset for large datasets to speed up PCA
+        if len(X) > 1000:
+            subset_indices = np.random.choice(len(X), 1000, replace=False)
+            X_subset = X[subset_indices]
+        else:
+            X_subset = X
+
+        # PCA analysis on subset
+        n_components = min(X_subset.shape[0], X_subset.shape[1])
+        pca = PCA(n_components=n_components)
+        pca.fit(X_subset)
 
         # Find components explaining 95% variance
         cumsum_variance = np.cumsum(pca.explained_variance_ratio_)
-        components_95 = np.argmax(cumsum_variance >= 0.95) + 1
-        components_90 = np.argmax(cumsum_variance >= 0.90) + 1
+        components_95 = np.argmax(cumsum_variance >= 0.95) + 1 if len(cumsum_variance) > 0 else X.shape[1]
+        components_90 = np.argmax(cumsum_variance >= 0.90) + 1 if len(cumsum_variance) > 0 else X.shape[1]
 
         return {
             'original_dimensions': X.shape[1],
             'effective_dimensions_90': components_90,
             'effective_dimensions_95': components_95,
             'dimension_reduction_potential': X.shape[1] - components_95,
-            'first_component_variance': pca.explained_variance_ratio_[0],
+            'first_component_variance': pca.explained_variance_ratio_[0] if len(pca.explained_variance_ratio_) > 0 else 0.0,
             'needs_dimensionality_reduction': components_95 < X.shape[1] * 0.8
         }
 

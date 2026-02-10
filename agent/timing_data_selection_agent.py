@@ -84,8 +84,9 @@ class IntelligentInsight:
 class RealIntelligenceExplorationEngine:
     """Genuine data-driven exploration engine - no fake thoughts or actions"""
 
-    def __init__(self):
-        self.data_analyzer = DataCharacteristicsAnalyzer()
+    def __init__(self, verbose=True):
+        self.verbose = verbose
+        self.data_analyzer = DataCharacteristicsAnalyzer(verbose=verbose)
         self.reasoning_engine = IntelligentReasoningEngine()
         self.parameter_optimizer = IntelligentParameterOptimizer()
         self.insights_memory = ConcreteInsightsMemory()
@@ -103,11 +104,21 @@ class RealIntelligenceExplorationEngine:
         if not SKLEARN_AVAILABLE:
             return {'error': 'Machine learning libraries not available'}
 
+        if self.verbose:
+            print(f"   Starting deep statistical analysis of {len(data)} samples...")
+
         # Step 1: Deep data analysis - REAL intelligence
         characteristics = self.data_analyzer.analyze_dataset(data)
 
+        if self.verbose:
+            print(f"   Data analysis completed in {time.time() - start_time:.2f}s")
+            print(f"   Generating evidence-based insights...")
+
         # Step 2: Evidence-based reasoning - REAL intelligence
         reasoning = self.reasoning_engine.generate_evidence_based_insight(characteristics)
+
+        if self.verbose:
+            print(f"   Determining optimal strategy...")
 
         # Step 3: Data-driven strategy selection - REAL intelligence
         strategy = self.reasoning_engine.determine_optimal_strategy(characteristics)
@@ -311,7 +322,7 @@ class TimingDataSelectionAgent:
         self.llm = llm  # LLM as reasoning brain, but fed real data not fake thoughts
 
         # Real intelligence components
-        self.exploration_engine = RealIntelligenceExplorationEngine()
+        self.exploration_engine = RealIntelligenceExplorationEngine(verbose=verbose)
         self.experiment_executor = RealIntelligenceExperimentExecutor()
         self.evidence_sampler = EvidenceBasedSampler()
         self.insights_memory = ConcreteInsightsMemory()
