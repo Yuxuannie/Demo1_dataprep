@@ -996,8 +996,8 @@ def initialize_timing_llm():
             applied_count += 1
 
     logger.info(f"Timing Domain LLM Configuration:")
-    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}")
-    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'llama2')}")
+    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')}")
+    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'Qwen2.5_coder_32B')}")
     logger.info(f"   Applied {applied_count}/5 timing-optimized parameters")
 
     try:
@@ -1021,8 +1021,8 @@ def initialize_ollama_llm():
     if Ollama is None:
         raise ImportError("Neither langchain_community.llms.Ollama nor langchain_ollama available")
 
-    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-    model = os.getenv('OLLAMA_MODEL', 'llama2')
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
+    model = os.getenv('OLLAMA_MODEL', 'Qwen2.5_coder_32B')
 
     llm_params = {
         'model': model,
@@ -1092,7 +1092,7 @@ def test_ollama_connection(quick_check: bool = False):
     import logging
 
     logger = logging.getLogger(__name__)
-    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
 
     try:
         # For quick check, just test if server is responding
@@ -1105,7 +1105,7 @@ def test_ollama_connection(quick_check: bool = False):
         if response.status_code == 200:
             models = response.json().get('models', [])
             model_names = [model['name'] for model in models]
-            target_model = os.getenv('OLLAMA_MODEL', 'llama2')
+            target_model = os.getenv('OLLAMA_MODEL', 'Qwen2.5_coder_32B')
 
             if any(target_model in name for name in model_names):
                 logger.info(f"Ollama connection successful, {target_model} available")
@@ -1196,7 +1196,7 @@ def create_autonomous_agent(llm=None, verbose: bool = True, fast_mode: bool = Fa
     if llm is None:
         print("[ERROR] Cannot create agent without LLM connection")
         print("[INFO] Please ensure you have:")
-        print("   - Ollama running locally (http://localhost:11434), or")
+        print("   - Ollama running on http://f15dtpai1:11434, or")
         print("   - OPENAI_API_KEY environment variable set, or")
         print("   - ANTHROPIC_API_KEY environment variable set")
         return None
