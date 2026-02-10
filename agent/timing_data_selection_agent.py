@@ -131,6 +131,10 @@ class AutonomousExplorationEngine:
         self.llm_response_cache = {}  # context_hash -> response
         self.algorithm_discovery_cache = {}  # data_characteristics -> algorithms
 
+        # CONTEXT VARIABLES: Store current thought and action for method access
+        self.current_thought = ""
+        self.current_action = ""
+
     async def autonomous_explore(self, data, target_percentage: float = 5.0) -> Dict[str, Any]:
         """Agent autonomously explores the data without hardcoded patterns."""
         self.execution_context['current_data'] = data
@@ -337,6 +341,10 @@ class AutonomousExplorationEngine:
         """Execute autonomous action with enhanced analysis and code generation."""
         print(f"[\033[93mEXECUTE\033[0m] Executing autonomous action: {action}")
 
+        # Store thought and action in instance variables for access by other methods
+        self.current_thought = thought
+        self.current_action = action
+
         discoveries = {
             'action_executed': action,
             'timestamp': time.time(),
@@ -367,11 +375,11 @@ class AutonomousExplorationEngine:
 
                     # INTELLIGENT SAMPLING: Context-aware sampling based on agent's goal
                     if len(X_scaled) > 5000:
-                        sampling_strategy = self._determine_sampling_strategy(thought, action)
+                        sampling_strategy = self._determine_sampling_strategy(self.current_thought, self.current_action)
                         print(f"[\033[93mINTELLIGENT\033[0m] Large dataset detected ({len(X_scaled)} samples)")
                         print(f"[\033[93mINTELLIGENT\033[0m] Sampling strategy: {sampling_strategy}")
 
-                        X_sample, sample_indices = self._smart_sample(X_scaled, 5000, sampling_strategy, thought, action)
+                        X_sample, sample_indices = self._smart_sample(X_scaled, 5000, sampling_strategy, self.current_thought, self.current_action)
                         sample_mode = True
                         print(f"[\033[93mINTELLIGENT\033[0m] Sampled {len(X_sample)} points using {sampling_strategy} strategy")
                     else:
