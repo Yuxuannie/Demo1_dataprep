@@ -133,7 +133,7 @@ class AutonomousExplorationEngine:
         for iteration in range(self.max_iterations):
             self.iteration_count = iteration
 
-            print(f"\n[ITER-{iteration+1}] Autonomous exploration iteration {iteration+1}/{self.max_iterations}")
+            print(f"\n[\033[96mITER-{iteration+1}\033[0m] Autonomous exploration iteration {iteration+1}/{self.max_iterations}")
 
             # Generate dynamic exploration prompt based on current knowledge
             exploration_context = {
@@ -149,13 +149,19 @@ class AutonomousExplorationEngine:
 
             try:
                 # Agent reasons about what to explore
+                print(f"[\033[94mTHINKING\033[0m] Agent reasoning about exploration strategy...")
                 response = await self._query_llm(exploration_prompt)
 
                 # Parse agent's autonomous response
                 thought, action, observation = self._parse_exploration_response(response)
 
-                # Execute autonomous action
-                discoveries = await self._execute_autonomous_action(action, data)
+                print(f"[\033[95mTHOUGHT\033[0m] {thought}")
+                print(f"[\033[93mACTION\033[0m] {action}")
+
+                # Execute autonomous action with detailed analysis
+                discoveries = await self._execute_autonomous_action_enhanced(action, data, iteration)
+
+                print(f"[\033[92mOBSERVE\033[0m] {observation}")
 
                 # Agent evaluates its own discoveries
                 quality_score = await self._autonomous_quality_evaluation(discoveries, iteration)
@@ -175,16 +181,17 @@ class AutonomousExplorationEngine:
                 # Agent learns from each iteration
                 self._update_autonomous_knowledge(result)
 
-                print(f"[DISCOVER] Quality: {quality_score:.3f}, Action: {action[:50]}...")
+                print(f"[\033[92mDISCOVER\033[0m] Quality: {quality_score:.3f}, Success: {'✅' if result.success else '❌'}")
+                print(f"[\033[92mDISCOVER\033[0m] Discoveries: {len(discoveries)} insights found")
 
                 # Agent autonomously decides whether to continue
                 should_continue = await self._autonomous_stopping_decision(exploration_results)
                 if not should_continue:
-                    print(f"[COMPLETE] Agent autonomously decided to stop exploration after {iteration+1} iterations")
+                    print(f"[\033[92mCOMPLETE\033[0m] Agent autonomously decided to stop exploration after {iteration+1} iterations")
                     break
 
             except Exception as e:
-                print(f"[ERROR] Exploration iteration {iteration+1} failed: {e}")
+                print(f"[\033[91mERROR\033[0m] Exploration iteration {iteration+1} failed: {e}")
                 await self._autonomous_recovery(str(e))
 
         # Agent synthesizes final exploration knowledge
@@ -202,7 +209,19 @@ class AutonomousExplorationEngine:
         """Query LLM with autonomous prompt."""
         try:
             if hasattr(self.llm, 'invoke'):
-                response = self.llm.invoke({"input": prompt})
+                # Try different input formats based on LLM type
+                try:
+                    # First try direct string input
+                    response = self.llm.invoke(prompt)
+                except Exception as e1:
+                    try:
+                        # Try with input key
+                        response = self.llm.invoke({"input": prompt})
+                    except Exception as e2:
+                        # Try as list of messages
+                        from langchain.schema import HumanMessage
+                        response = self.llm.invoke([HumanMessage(content=prompt)])
+
                 if hasattr(response, 'content'):
                     return response.content
                 else:
@@ -210,7 +229,7 @@ class AutonomousExplorationEngine:
             else:
                 return str(self.llm.invoke(prompt))
         except Exception as e:
-            print(f"[WARNING] LLM query failed: {e}")
+            print(f"[\033[91mWARNING\033[0m] LLM query failed: {e}")
             return f"ERROR: {e}"
 
     def _parse_exploration_response(self, response: str) -> Tuple[str, str, str]:
@@ -268,26 +287,245 @@ class AutonomousExplorationEngine:
 
         return discoveries
 
+    async def _execute_autonomous_action_enhanced(self, action: str, data, iteration: int) -> Dict[str, Any]:
+        """Execute autonomous action with enhanced analysis and code generation."""
+        print(f"[\033[93mEXECUTE\033[0m] Executing autonomous action: {action}")
+
+        discoveries = {
+            'action_executed': action,
+            'timestamp': time.time(),
+            'iteration': iteration,
+            'analysis_details': {}
+        }
+
+        try:
+            if SKLEARN_AVAILABLE:
+                numeric_cols = data.select_dtypes(include=[np.number]).columns
+                print(f"[\033[93mEXECUTE\033[0m] Found {len(numeric_cols)} numeric columns: {list(numeric_cols)}")
+
+                if len(numeric_cols) > 0:
+                    X = data[numeric_cols].values
+                    print(f"[\033[93mEXECUTE\033[0m] Data matrix shape: {X.shape}")
+
+                    # Standardize features
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(X)
+
+                    # Data distribution analysis
+                    print(f"[\033[93mEXECUTE\033[0m] Analyzing data distribution...")
+                    feature_stats = {
+                        'means': np.mean(X, axis=0).tolist(),
+                        'stds': np.std(X, axis=0).tolist(),
+                        'correlations': np.corrcoef(X.T).tolist() if X.shape[1] > 1 else [[1.0]]
+                    }
+
+                    # Multiple clustering approaches
+                    clustering_results = {}
+
+                    # KMeans clustering
+                    n_clusters = max(2, min(5, len(data)//20))
+                    print(f"[\033[93mEXECUTE\033[0m] Trying KMeans with {n_clusters} clusters...")
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+                    kmeans_labels = kmeans.fit_predict(X_scaled)
+
+                    # DBSCAN clustering
+                    print(f"[\033[93mEXECUTE\033[0m] Trying DBSCAN clustering...")
+                    dbscan = DBSCAN(eps=0.5, min_samples=5)
+                    dbscan_labels = dbscan.fit_predict(X_scaled)
+
+                    # Calculate quality metrics
+                    kmeans_silhouette = silhouette_score(X_scaled, kmeans_labels) if len(np.unique(kmeans_labels)) > 1 else 0.0
+                    dbscan_silhouette = silhouette_score(X_scaled, dbscan_labels) if len(np.unique(dbscan_labels)) > 1 and -1 not in dbscan_labels else 0.0
+
+                    clustering_results = {
+                        'kmeans': {
+                            'labels': kmeans_labels.tolist(),
+                            'n_clusters': len(np.unique(kmeans_labels)),
+                            'silhouette_score': kmeans_silhouette,
+                            'cluster_distribution': dict(zip(*np.unique(kmeans_labels, return_counts=True)))
+                        },
+                        'dbscan': {
+                            'labels': dbscan_labels.tolist(),
+                            'n_clusters': len(np.unique(dbscan_labels[dbscan_labels != -1])) if len(dbscan_labels[dbscan_labels != -1]) > 0 else 0,
+                            'silhouette_score': dbscan_silhouette,
+                            'outliers': np.sum(dbscan_labels == -1),
+                            'cluster_distribution': dict(zip(*np.unique(dbscan_labels, return_counts=True)))
+                        }
+                    }
+
+                    print(f"[\033[93mEXECUTE\033[0m] KMeans: {len(np.unique(kmeans_labels))} clusters, Silhouette: {kmeans_silhouette:.3f}")
+                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN: {clustering_results['dbscan']['n_clusters']} clusters, {clustering_results['dbscan']['outliers']} outliers")
+
+                    discoveries.update({
+                        'data_shape': data.shape,
+                        'numeric_features': len(numeric_cols),
+                        'feature_names': list(numeric_cols),
+                        'feature_statistics': feature_stats,
+                        'clustering_results': clustering_results,
+                        'best_algorithm': 'kmeans' if kmeans_silhouette > dbscan_silhouette else 'dbscan',
+                        'best_silhouette': max(kmeans_silhouette, dbscan_silhouette),
+                        'analysis_depth': 'comprehensive'
+                    })
+
+                    # Generate analysis code dynamically
+                    analysis_code = self._generate_analysis_code(data, discoveries)
+                    discoveries['generated_code'] = analysis_code
+
+                else:
+                    print(f"[\033[91mEXECUTE\033[0m] No numeric columns found for analysis")
+                    discoveries.update({
+                        'data_shape': data.shape,
+                        'numeric_features': 0,
+                        'error': 'No numeric data available for clustering analysis'
+                    })
+            else:
+                print(f"[\033[91mEXECUTE\033[0m] Scikit-learn not available")
+                discoveries['error'] = 'Scikit-learn not available for analysis'
+
+        except Exception as e:
+            print(f"[\033[91mEXECUTE\033[0m] Analysis failed: {e}")
+            discoveries['error'] = str(e)
+
+        return discoveries
+
+    def _generate_analysis_code(self, data, discoveries: Dict[str, Any]) -> str:
+        """Generate Python code for the current analysis."""
+        feature_names = discoveries.get('feature_names', [])
+        clustering_results = discoveries.get('clustering_results', {})
+
+        code = f"""
+# Autonomous Data Analysis Code - Generated by Agent
+import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+
+# Load and prepare data
+data = pd.read_csv('your_data.csv')
+numeric_cols = {feature_names}
+X = data[numeric_cols].values
+
+# Standardize features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# KMeans clustering (discovered as optimal)
+kmeans = KMeans(n_clusters={clustering_results.get('kmeans', {}).get('n_clusters', 3)}, random_state=42)
+kmeans_labels = kmeans.fit_predict(X_scaled)
+
+# Quality assessment
+silhouette = silhouette_score(X_scaled, kmeans_labels)
+print(f"Silhouette Score: {{silhouette:.3f}}")
+
+# Results
+print(f"Found {{len(np.unique(kmeans_labels))}} clusters")
+print(f"Cluster distribution: {{dict(zip(*np.unique(kmeans_labels, return_counts=True)))}}")
+"""
+        return code
+
     async def _autonomous_quality_evaluation(self, discoveries: Dict[str, Any], iteration: int) -> float:
-        """Agent evaluates the quality of its own discoveries."""
+        """Agent evaluates the quality of its own discoveries with detailed explanation."""
+        print(f"[\033[94mVALIDATE\033[0m] Evaluating discovery quality for iteration {iteration+1}...")
+
         quality_factors = []
+        quality_breakdown = {}
 
-        # Check for new discoveries
-        if 'silhouette_score' in discoveries:
-            quality_factors.append(max(0, discoveries['silhouette_score']))
+        # Factor 1: Clustering quality (silhouette score)
+        if 'best_silhouette' in discoveries:
+            silhouette = discoveries['best_silhouette']
+            silhouette_quality = max(0, min(1, silhouette + 0.5))  # Scale from -1,1 to 0,1
+            quality_factors.append(silhouette_quality)
+            quality_breakdown['clustering_quality'] = {
+                'score': silhouette,
+                'normalized': silhouette_quality,
+                'explanation': f"Silhouette score {silhouette:.3f} -> quality {silhouette_quality:.3f}"
+            }
+            print(f"[\033[94mVALIDATE\033[0m] Clustering Quality: {silhouette:.3f} -> {silhouette_quality:.3f}")
 
-        # Check for data insights
-        if 'cluster_distribution' in discoveries:
-            cluster_balance = np.std(list(discoveries['cluster_distribution'].values()))
-            quality_factors.append(1.0 / (1.0 + cluster_balance))
+        elif 'silhouette_score' in discoveries:
+            silhouette = discoveries['silhouette_score']
+            silhouette_quality = max(0, min(1, silhouette + 0.5))
+            quality_factors.append(silhouette_quality)
+            quality_breakdown['clustering_quality'] = {
+                'score': silhouette,
+                'normalized': silhouette_quality,
+                'explanation': f"Basic silhouette {silhouette:.3f} -> quality {silhouette_quality:.3f}"
+            }
+            print(f"[\033[94mVALIDATE\033[0m] Basic Clustering Quality: {silhouette:.3f} -> {silhouette_quality:.3f}")
 
-        # Penalize errors
+        # Factor 2: Data coverage and insights
+        if 'clustering_results' in discoveries:
+            clustering_results = discoveries['clustering_results']
+            kmeans_clusters = clustering_results.get('kmeans', {}).get('n_clusters', 0)
+            dbscan_clusters = clustering_results.get('dbscan', {}).get('n_clusters', 0)
+
+            coverage_quality = min(1.0, (kmeans_clusters + dbscan_clusters) / 8.0)  # Reward multiple clusters up to 8
+            quality_factors.append(coverage_quality)
+            quality_breakdown['coverage_quality'] = {
+                'kmeans_clusters': kmeans_clusters,
+                'dbscan_clusters': dbscan_clusters,
+                'normalized': coverage_quality,
+                'explanation': f"Found {kmeans_clusters}+{dbscan_clusters} clusters -> coverage {coverage_quality:.3f}"
+            }
+            print(f"[\033[94mVALIDATE\033[0m] Data Coverage: {kmeans_clusters}+{dbscan_clusters} clusters -> {coverage_quality:.3f}")
+
+        # Factor 3: Analysis depth
+        if 'analysis_depth' in discoveries and discoveries['analysis_depth'] == 'comprehensive':
+            depth_quality = 0.8
+            quality_factors.append(depth_quality)
+            quality_breakdown['analysis_depth'] = {
+                'level': 'comprehensive',
+                'score': depth_quality,
+                'explanation': "Comprehensive analysis performed"
+            }
+            print(f"[\033[94mVALIDATE\033[0m] Analysis Depth: Comprehensive -> {depth_quality:.3f}")
+
+        # Factor 4: Feature analysis
+        if 'feature_statistics' in discoveries:
+            feature_quality = 0.6
+            quality_factors.append(feature_quality)
+            quality_breakdown['feature_analysis'] = {
+                'features_analyzed': len(discoveries.get('feature_names', [])),
+                'score': feature_quality,
+                'explanation': f"Analyzed {len(discoveries.get('feature_names', []))} features"
+            }
+            print(f"[\033[94mVALIDATE\033[0m] Feature Analysis: {len(discoveries.get('feature_names', []))} features -> {feature_quality:.3f}")
+
+        # Factor 5: Code generation
+        if 'generated_code' in discoveries:
+            code_quality = 0.7
+            quality_factors.append(code_quality)
+            quality_breakdown['code_generation'] = {
+                'generated': True,
+                'score': code_quality,
+                'explanation': "Analysis code generated successfully"
+            }
+            print(f"[\033[94mVALIDATE\033[0m] Code Generation: Success -> {code_quality:.3f}")
+
+        # Penalize errors heavily
         if 'error' in discoveries:
-            quality_factors.append(0.1)
-        else:
-            quality_factors.append(0.7)
+            error_penalty = 0.1
+            quality_factors = [error_penalty]  # Override all other factors
+            quality_breakdown['error_penalty'] = {
+                'error': discoveries['error'],
+                'penalty': error_penalty,
+                'explanation': f"Error occurred: {discoveries['error']}"
+            }
+            print(f"[\033[91mVALIDATE\033[0m] Error Penalty: {error_penalty:.3f} due to {discoveries['error']}")
 
-        return np.mean(quality_factors) if quality_factors else 0.5
+        # Calculate final quality
+        final_quality = np.mean(quality_factors) if quality_factors else 0.5
+
+        # Store quality breakdown for debugging
+        discoveries['quality_breakdown'] = quality_breakdown
+        discoveries['quality_factors'] = quality_factors
+        discoveries['final_quality'] = final_quality
+
+        print(f"[\033[94mVALIDATE\033[0m] Final Quality Score: {final_quality:.3f} (from {len(quality_factors)} factors)")
+        print(f"[\033[94mVALIDATE\033[0m] Quality Factors: {[f'{q:.3f}' for q in quality_factors]}")
+
+        return final_quality
 
     async def _autonomous_stopping_decision(self, exploration_results: List[ExplorationResult]) -> bool:
         """Agent autonomously decides whether to continue exploration."""
@@ -493,7 +731,16 @@ class ParallelExperimentExecutor:
         """Query LLM for experiment design."""
         try:
             if hasattr(self.llm, 'invoke'):
-                response = self.llm.invoke({"input": prompt})
+                # Try different input formats based on LLM type
+                try:
+                    response = self.llm.invoke(prompt)
+                except Exception as e1:
+                    try:
+                        response = self.llm.invoke({"input": prompt})
+                    except Exception as e2:
+                        from langchain.schema import HumanMessage
+                        response = self.llm.invoke([HumanMessage(content=prompt)])
+
                 if hasattr(response, 'content'):
                     return response.content
                 else:
@@ -501,7 +748,7 @@ class ParallelExperimentExecutor:
             else:
                 return str(self.llm.invoke(prompt))
         except Exception as e:
-            print(f"[WARNING] LLM query failed: {e}")
+            print(f"[\033[91mWARNING\033[0m] LLM query failed: {e}")
             return f"ERROR: {e}"
 
 class AutonomousValidationSystem:
@@ -567,11 +814,13 @@ class AutonomousStrategySynthesizer:
 
     async def autonomous_synthesize(self, exploration_results: List, experiment_results: List[Dict], validation_results: Dict[str, Any]) -> Dict[str, Any]:
         """Agent autonomously synthesizes optimal strategy from all evidence."""
-        print(f"[SYNTHESIS] Synthesizing strategy from {len(experiment_results)} experiments")
+        print(f"[\033[95mSYNTHESIS\033[0m] Synthesizing strategy from {len(experiment_results)} experiments")
 
         # Find best performing validated experiment
         best_experiment = None
         best_score = 0.0
+
+        print(f"[\033[95mSYNTHESIS\033[0m] Evaluating {len(experiment_results)} experimental results...")
 
         for experiment in experiment_results:
             if experiment.get('success'):
@@ -580,6 +829,7 @@ class AutonomousStrategySynthesizer:
 
                 if validation.get('overall_passed', False):
                     quality_score = validation.get('quality_score', 0.0)
+                    print(f"[\033[95mSYNTHESIS\033[0m] {algorithm}: quality {quality_score:.3f}")
                     if quality_score > best_score:
                         best_score = quality_score
                         best_experiment = experiment
@@ -593,6 +843,7 @@ class AutonomousStrategySynthesizer:
                 'reasoning': f"Selected based on validation quality score: {best_score:.3f}",
                 'synthesis_timestamp': time.time()
             }
+            print(f"[\033[95mSYNTHESIS\033[0m] ✅ Best strategy: {strategy['algorithm']} (confidence: {best_score:.3f})")
         else:
             # Fallback strategy
             strategy = {
@@ -602,12 +853,14 @@ class AutonomousStrategySynthesizer:
                 'reasoning': 'Fallback strategy - no experiments passed validation',
                 'synthesis_timestamp': time.time()
             }
+            print(f"[\033[95mSYNTHESIS\033[0m] ⚠️  Using fallback strategy: {strategy['algorithm']}")
 
         # Get autonomous strategy refinement from LLM
+        print(f"[\033[95mSYNTHESIS\033[0m] Consulting LLM for strategy refinement...")
         strategy_response = await self._query_llm("Generate optimal sampling strategy based on experimental evidence")
         strategy['llm_refinement'] = strategy_response[:200]
 
-        print(f"[STRATEGY] Selected: {strategy['algorithm']} (confidence: {strategy['confidence']:.3f})")
+        print(f"[\033[95mSTRATEGY\033[0m] Final Selection: {strategy['algorithm']} (confidence: {strategy['confidence']:.3f})")
 
         self.synthesis_history.append(strategy)
         return strategy
@@ -616,7 +869,16 @@ class AutonomousStrategySynthesizer:
         """Query LLM for strategy synthesis."""
         try:
             if hasattr(self.llm, 'invoke'):
-                response = self.llm.invoke({"input": prompt})
+                # Try different input formats based on LLM type
+                try:
+                    response = self.llm.invoke(prompt)
+                except Exception as e1:
+                    try:
+                        response = self.llm.invoke({"input": prompt})
+                    except Exception as e2:
+                        from langchain.schema import HumanMessage
+                        response = self.llm.invoke([HumanMessage(content=prompt)])
+
                 if hasattr(response, 'content'):
                     return response.content
                 else:
