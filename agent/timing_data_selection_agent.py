@@ -50,6 +50,16 @@ AGENTIC_LLM_PARAMETERS = {
     'frequency_penalty': 0.15   # Reduce repetition across reasoning steps
 }
 
+# Intent Classification System
+class UserIntent(Enum):
+    """User intent categories for conversational Q&A."""
+    EXECUTE_SAMPLING = "execute_sampling"
+    QUESTION_ABOUT_RESULTS = "question_about_results"
+    MODIFY_PARAMETERS = "modify_parameters"
+    EXPLAIN_METHODOLOGY = "explain_methodology"
+    REQUEST_VISUALIZATION = "request_visualization"
+    GENERAL_HELP = "general_help"
+
 # Configuration
 VALIDATION_BOUNDARIES = {
     'minimum_cell_type_coverage': 0.8,
@@ -624,6 +634,15 @@ class TimingDataSelectionAgent:
         self.llm = llm
         self.system_prompt = TIMING_SYSTEM_PROMPT
         self.execution_context = {}
+
+        # Conversation and reasoning tracking
+        self.conversation_history = []
+        self.current_data = None
+        self.current_features = None
+        self.scaler = None
+        self.reasoning_log = []
+        self._imports_loaded = False
+
         self.initialize_execution_context()
 
         # Initialize autonomous components
@@ -971,6 +990,290 @@ class TimingDataSelectionAgent:
 
         return assessment
 
+    def _load_imports(self):
+        """Load heavy imports only when needed."""
+        if self._imports_loaded:
+            return
+
+        # Import LangChain components (these are loaded dynamically)
+        global ChatPromptTemplate, HumanMessage, SystemMessage
+        try:
+            from langchain.prompts import ChatPromptTemplate
+            try:
+                from langchain_core.messages import HumanMessage, SystemMessage
+            except ImportError:
+                from langchain.schema import HumanMessage, SystemMessage
+            self._imports_loaded = True
+        except ImportError:
+            print("[WARNING] LangChain not available - some conversational features may not work")
+            # Create fallback classes
+            ChatPromptTemplate = None
+            HumanMessage = None
+            SystemMessage = None
+
+    def add_message(self, role: str, content: str):
+        """Add message to conversation history."""
+        self.conversation_history.append({
+            'role': role,
+            'content': content,
+            'timestamp': pd.Timestamp.now()
+        })
+
+    def log_reasoning(self, stage: str, content: str):
+        """Log agent reasoning."""
+        self._load_imports()
+        self.reasoning_log.append({
+            'stage': stage,
+            'content': content,
+            'timestamp': pd.Timestamp.now()
+        })
+
+    def handle_conversation(self, user_query: str) -> Dict[str, Any]:
+        """Handle conversational questions about results without re-running selection."""
+        self._load_imports()
+
+        # Classify user intent
+        intent, params = self.classify_user_intent(user_query)
+
+        if intent == UserIntent.QUESTION_ABOUT_RESULTS:
+            # Generate response based on conversation history
+            context = "\n".join([msg['content'] for msg in self.conversation_history[-5:]])
+
+            question_prompt = f"""Based on our previous conversation about timing data selection, answer this follow-up question:
+
+User Question: {user_query}
+
+Recent Context:
+            {context}
+
+Provide a clear, technical explanation addressing their specific question about the selection methodology, results, or reasoning. Use plain text only."""
+
+            try:
+                if ChatPromptTemplate:
+                    prompt_template = ChatPromptTemplate.from_messages([
+                        SystemMessage(content=self.system_prompt),
+                        HumanMessage(content=question_prompt)
+                    ])
+                    chain = prompt_template | self.llm
+                    response = chain.invoke({})
+                else:
+                    # Fallback if LangChain not available
+                    response = self.llm.invoke({"input": question_prompt})
+
+                if hasattr(response, 'content'):
+                    response_text = response.content
+                else:
+                    response_text = str(response)
+
+                self.add_message('assistant', response_text)
+
+                return {
+                    'type': 'conversational_response',
+                    'intent': intent.value,
+                    'response': response_text,
+                    'parameters': params
+                }
+
+            except Exception as e:
+                return {
+                    'type': 'conversational_response',
+                    'intent': intent.value,
+                    'response': f"I understand you're asking about the selection results, but I encountered an error: {e}",
+                    'parameters': params
+                }
+
+        elif intent == UserIntent.EXPLAIN_METHODOLOGY:
+            # Explain methodology without running selection
+            methodology_prompt = f"""Explain the timing data selection methodology to address this question:
+
+{user_query}
+
+Provide a technical explanation of the algorithms, approaches, and reasoning behind the methodology. Focus on the specific aspect they're asking about."""
+
+            try:
+                if ChatPromptTemplate:
+                    prompt_template = ChatPromptTemplate.from_messages([
+                        SystemMessage(content=self.system_prompt),
+                        HumanMessage(content=methodology_prompt)
+                    ])
+                    chain = prompt_template | self.llm
+                    response = chain.invoke({})
+                else:
+                    response = self.llm.invoke({"input": methodology_prompt})
+
+                if hasattr(response, 'content'):
+                    response_text = response.content
+                else:
+                    response_text = str(response)
+
+                self.add_message('assistant', response_text)
+
+                return {
+                    'type': 'methodology_explanation',
+                    'intent': intent.value,
+                    'response': response_text,
+                    'parameters': params
+                }
+
+            except Exception as e:
+                return {
+                    'type': 'methodology_explanation',
+                    'intent': intent.value,
+                    'response': f"I can explain the methodology, but encountered an error: {e}",
+                    'parameters': params
+                }
+
+        else:
+            # For other intents, indicate that selection should be run
+            return {
+                'type': 'requires_execution',
+                'intent': intent.value,
+                'parameters': params
+            }
+
+    def classify_user_intent(self, user_input: str) -> Tuple[UserIntent, Dict[str, Any]]:
+        """Classify user intent to determine whether to execute pipeline or answer from context."""
+        import re
+        input_lower = user_input.lower().strip()
+
+        # Intent patterns with priorities (most specific first)
+        intent_patterns = {
+            UserIntent.QUESTION_ABOUT_RESULTS: [
+                r'why did you (choose|pick|select)',
+                r'why.*(\d+)%',
+                r'explain (the|your) (selection|choice|decision)',
+                r'how did you (determine|decide|choose)',
+                r'what (made you|criteria)',
+                r'can you explain why',
+                r'reasoning behind',
+                r'rationale for'
+            ],
+            UserIntent.EXPLAIN_METHODOLOGY: [
+                r'how does.*work',
+                r'explain.*methodology',
+                r'what.*algorithm',
+                r'how.*clustering',
+                r'explain.*approach'
+            ],
+            UserIntent.MODIFY_PARAMETERS: [
+                r'change.*percent',
+                r'use.*percent',
+                r'try.*different',
+                r'modify.*selection',
+                r'adjust.*parameter'
+            ]
+        }
+
+        # Extract parameters from user input
+        params = self._extract_parameters_from_input(user_input)
+
+        # Check for specific intent patterns
+        for intent, patterns in intent_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, input_lower):
+                    return intent, params
+
+        # Default to execution if no conversational intent detected
+        return UserIntent.EXECUTE_SAMPLING, params
+
+    def _extract_parameters_from_input(self, user_input: str) -> Dict[str, Any]:
+        """Extract parameters like percentage, algorithm, etc. from user input."""
+        import re
+        params = {}
+
+        # Extract percentage
+        percentage_patterns = [
+            r'(\d+(?:\.\d+)?)\s*%',
+            r'(\d+(?:\.\d+)?)\s*percent',
+            r'select\s+(\d+(?:\.\d+)?)'
+        ]
+
+        for pattern in percentage_patterns:
+            match = re.search(pattern, user_input.lower())
+            if match:
+                params['selection_percentage'] = float(match.group(1))
+                break
+
+        # Extract algorithm preferences
+        algorithm_keywords = {
+            'kmeans': 'kmeans',
+            'gaussian': 'gaussian_mixture',
+            'dbscan': 'dbscan',
+            'spectral': 'spectral_clustering'
+        }
+
+        for keyword, algorithm in algorithm_keywords.items():
+            if keyword in user_input.lower():
+                params['preferred_algorithm'] = algorithm
+                break
+
+        return params
+
+    def get_conversation_history(self) -> List[Dict[str, Any]]:
+        """Get conversation history."""
+        return self.conversation_history
+
+    def self_test(self, verbose: bool = True) -> bool:
+        """Run internal self-tests to validate agent functionality."""
+        if verbose:
+            print("Running agent self-tests...")
+
+        success_count = 0
+        total_tests = 0
+
+        # Test 1: LLM connectivity
+        try:
+            test_response = self.llm.invoke({"input": "Test connection"})
+            if test_response:
+                success_count += 1
+                if verbose:
+                    print("[PASS] LLM connection test")
+            else:
+                if verbose:
+                    print("[FAIL] LLM connection test")
+            total_tests += 1
+        except Exception as e:
+            if verbose:
+                print(f"[FAIL] LLM connection test: {e}")
+            total_tests += 1
+
+        # Test 2: Intent classification
+        try:
+            intent, params = self.classify_user_intent("Select 5% of samples using KMeans")
+            if intent == UserIntent.EXECUTE_SAMPLING and params.get('selection_percentage') == 5.0:
+                success_count += 1
+                if verbose:
+                    print("[PASS] Intent classification test")
+            else:
+                if verbose:
+                    print("[FAIL] Intent classification test")
+            total_tests += 1
+        except Exception as e:
+            if verbose:
+                print(f"[FAIL] Intent classification test: {e}")
+            total_tests += 1
+
+        # Test 3: Parameter extraction
+        try:
+            params = self._extract_parameters_from_input("Use 7.5% with Gaussian clustering")
+            if params.get('selection_percentage') == 7.5:
+                success_count += 1
+                if verbose:
+                    print("[PASS] Parameter extraction test")
+            else:
+                if verbose:
+                    print("[FAIL] Parameter extraction test")
+            total_tests += 1
+        except Exception as e:
+            if verbose:
+                print(f"[FAIL] Parameter extraction test: {e}")
+            total_tests += 1
+
+        if verbose:
+            print(f"Self-test Results: {success_count}/{total_tests} tests passed")
+
+        return success_count == total_tests
+
 
 # LLM Initialization Functions
 def initialize_timing_llm():
@@ -997,7 +1300,7 @@ def initialize_timing_llm():
 
     logger.info(f"Timing Domain LLM Configuration:")
     logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')}")
-    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'Qwen2.5_coder_32B')}")
+    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')}")
     logger.info(f"   Applied {applied_count}/5 timing-optimized parameters")
 
     try:
@@ -1022,7 +1325,7 @@ def initialize_ollama_llm():
         raise ImportError("Neither langchain_community.llms.Ollama nor langchain_ollama available")
 
     base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
-    model = os.getenv('OLLAMA_MODEL', 'Qwen2.5_coder_32B')
+    model = os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')
 
     llm_params = {
         'model': model,
@@ -1105,7 +1408,7 @@ def test_ollama_connection(quick_check: bool = False):
         if response.status_code == 200:
             models = response.json().get('models', [])
             model_names = [model['name'] for model in models]
-            target_model = os.getenv('OLLAMA_MODEL', 'Qwen2.5_coder_32B')
+            target_model = os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')
 
             if any(target_model in name for name in model_names):
                 logger.info(f"Ollama connection successful, {target_model} available")
