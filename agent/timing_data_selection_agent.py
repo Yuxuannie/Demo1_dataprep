@@ -210,7 +210,14 @@ class RealIntelligenceExperimentExecutor:
             if self.verbose:
                 score = result.get('performance_score', 0)
                 status = "SUCCESS" if result.get('success') else "FAILED"
-                print(f"   \033[32mRESULT:\033[0m {algorithm_config['name']}: score={score:.3f} ({status})")
+
+                # Explain the scoring system
+                if result.get('success'):
+                    score_explanation = self._explain_clustering_score(score)
+                    print(f"   \033[32mRESULT:\033[0m {algorithm_config['name']}: silhouette_score={score:.3f} ({score_explanation})")
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    print(f"   \033[31mRESULT:\033[0m {algorithm_config['name']}: FAILED - {error_msg}")
 
             # Update algorithm performance history
             if result.get('success'):
@@ -222,9 +229,63 @@ class RealIntelligenceExperimentExecutor:
 
         if self.verbose:
             best_score = max([r.get('performance_score', 0) for r in experiment_results])
-            print(f"   \033[32mCOMPLETED:\033[0m Algorithm testing complete. Best score: {best_score:.3f}")
+            best_algorithm = max(experiment_results, key=lambda x: x.get('performance_score', 0))['algorithm'] if experiment_results else 'none'
+            print(f"   \033[32mCOMPLETED:\033[0m Algorithm testing complete. Best: {best_algorithm} (score: {best_score:.3f})")
+
+            # Show detailed reasoning for algorithm selection
+            self._display_algorithm_reasoning(experiment_results, characteristics)
 
         return experiment_results
+
+    def _explain_clustering_score(self, score: float) -> str:
+        """Explain what the clustering score means"""
+        if score > 0.7:
+            return "EXCELLENT clustering quality"
+        elif score > 0.5:
+            return "GOOD clustering quality"
+        elif score > 0.3:
+            return "FAIR clustering quality"
+        elif score > 0:
+            return "POOR clustering quality"
+        else:
+            return "INVALID clustering"
+
+    def _display_algorithm_reasoning(self, experiment_results: List[Dict[str, Any]], characteristics: Dict[str, Any]):
+        """Display detailed reasoning for algorithm selection"""
+        print(f"\n   \033[36mREASONING PROCESS:\033[0m")
+
+        # Show data characteristics that influenced decisions
+        basic_stats = characteristics.get('basic_stats', {})
+        clustering = characteristics.get('clustering_potential', {})
+        outliers = characteristics.get('outlier_analysis', {})
+        correlations = characteristics.get('correlation_analysis', {})
+
+        print(f"   Data Profile:")
+        print(f"   - Samples: {basic_stats.get('n_samples', 0)}, Features: {basic_stats.get('n_features', 0)}")
+        print(f"   - Hopkins Statistic: {clustering.get('hopkins_statistic', 0):.3f} (clustering tendency)")
+        print(f"   - Outlier Ratio: {outliers.get('global_outlier_ratio', 0):.1%}")
+        print(f"   - Max Correlation: {correlations.get('max_correlation', 0):.3f}")
+
+        print(f"\n   Algorithm Evaluation:")
+        for result in experiment_results:
+            if result.get('success'):
+                alg_name = result['algorithm']
+                score = result.get('performance_score', 0)
+                reasoning = result.get('reasoning', 'No reasoning provided')
+                confidence = result.get('confidence', 0)
+
+                print(f"   - {alg_name}:")
+                print(f"     * Score: {score:.3f} ({self._explain_clustering_score(score)})")
+                print(f"     * Confidence: {confidence:.1%}")
+                print(f"     * Reasoning: {reasoning}")
+
+        # Show selection logic
+        if experiment_results:
+            best = max(experiment_results, key=lambda x: x.get('performance_score', 0))
+            print(f"\n   \033[32mSELECTION LOGIC:\033[0m")
+            print(f"   Selected {best['algorithm']} because:")
+            print(f"   - Highest silhouette score ({best.get('performance_score', 0):.3f})")
+            print(f"   - {best.get('reasoning', 'Best fit for data characteristics')}")
 
     async def _execute_single_experiment(self, algorithm_config: Dict[str, Any],
                                        characteristics: Dict[str, Any],
@@ -255,6 +316,7 @@ class RealIntelligenceExperimentExecutor:
 
             return {
                 'algorithm': algorithm_name,
+                'algorithm_name': algorithm_name,  # Ensure both keys are present
                 'parameters_used': final_params,
                 'performance_score': result.get('silhouette_score', 0),
                 'cluster_info': result,
@@ -852,7 +914,21 @@ Answer with specific strategy recommendations based on the numerical evidence ab
             asyncio.set_event_loop(loop)
             try:
                 result = loop.run_until_complete(self.intelligent_sample_selection(csv_path, percentage))
-                return result
+                # Ensure the result is properly formatted for UI
+                if isinstance(result, dict) and result.get('success', False):
+                    return result
+                else:
+                    return {
+                        'error': f'Analysis failed: {result.get("error", "Unknown error")}',
+                        'success': False,
+                        'method': 'error'
+                    }
+            except Exception as e:
+                return {
+                    'error': f'Execution failed: {str(e)}',
+                    'success': False,
+                    'method': 'error'
+                }
             finally:
                 loop.close()
 
