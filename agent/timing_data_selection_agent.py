@@ -1086,6 +1086,44 @@ def initialize_anthropic_llm(api_key: Optional[str] = None, model: str = "claude
         print(f"[ERROR] Failed to initialize Anthropic: {e}")
         return None
 
+def test_ollama_connection(quick_check: bool = False):
+    """Test Ollama connection and model availability."""
+    import requests
+    import logging
+
+    logger = logging.getLogger(__name__)
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+
+    try:
+        # For quick check, just test if server is responding
+        if quick_check:
+            response = requests.get(f"{base_url}/api/tags", timeout=1)
+            return response.status_code == 200
+
+        # Full check with model validation
+        response = requests.get(f"{base_url}/api/tags", timeout=3)
+        if response.status_code == 200:
+            models = response.json().get('models', [])
+            model_names = [model['name'] for model in models]
+            target_model = os.getenv('OLLAMA_MODEL', 'llama2')
+
+            if any(target_model in name for name in model_names):
+                logger.info(f"Ollama connection successful, {target_model} available")
+                return True
+            else:
+                logger.warning(f"Model {target_model} not found. Available: {model_names}")
+                return False
+        else:
+            logger.error(f"Ollama server error: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Ollama connection failed: {e}")
+        return False
+
+def quick_connection_check():
+    """Quick connection check for UI responsiveness."""
+    return test_ollama_connection(quick_check=True)
+
 def test_llm_connection(llm):
     """Test LLM connection with simple query."""
     if not llm:
@@ -1109,38 +1147,51 @@ def test_llm_connection(llm):
         print(f"[ERROR] LLM connection test failed: {e}")
         return False
 
-def auto_initialize_llm():
+def auto_initialize_llm(fast_mode: bool = False):
     """Automatically initialize the best available LLM."""
     print("[INIT] Auto-initializing LLM connection...")
 
     # Try Ollama first (local, no API key needed)
     try:
         llm = initialize_ollama_llm()
-        if llm and test_llm_connection(llm):
-            print("[SUCCESS] Connected to Ollama LLM")
-            return llm
+        if llm:
+            # In fast mode, skip connection testing for faster UI loading
+            if fast_mode:
+                print("[FAST] Ollama LLM initialized (connection not tested)")
+                return llm
+            elif test_llm_connection(llm):
+                print("[SUCCESS] Connected to Ollama LLM")
+                return llm
     except Exception as e:
         print(f"[WARNING] Ollama initialization failed: {e}")
 
     # Try OpenAI
     llm = initialize_openai_llm()
-    if llm and test_llm_connection(llm):
-        print("[SUCCESS] Connected to OpenAI LLM")
-        return llm
+    if llm:
+        if fast_mode:
+            print("[FAST] OpenAI LLM initialized (connection not tested)")
+            return llm
+        elif test_llm_connection(llm):
+            print("[SUCCESS] Connected to OpenAI LLM")
+            return llm
 
     # Try Anthropic
     llm = initialize_anthropic_llm()
-    if llm and test_llm_connection(llm):
-        print("[SUCCESS] Connected to Anthropic LLM")
-        return llm
+    if llm:
+        if fast_mode:
+            print("[FAST] Anthropic LLM initialized (connection not tested)")
+            return llm
+        elif test_llm_connection(llm):
+            print("[SUCCESS] Connected to Anthropic LLM")
+            return llm
 
     print("[ERROR] No LLM connection available")
     return None
 
-def create_autonomous_agent(llm=None, verbose: bool = True):
+def create_autonomous_agent(llm=None, verbose: bool = True, fast_mode: bool = False):
     """Factory function to create autonomous agent with LLM connection."""
     if llm is None:
-        llm = auto_initialize_llm()
+        llm = auto_initialize_llm(fast_mode=fast_mode)
 
     if llm is None:
         print("[ERROR] Cannot create agent without LLM connection")
@@ -1153,6 +1204,10 @@ def create_autonomous_agent(llm=None, verbose: bool = True):
     agent = TimingDataSelectionAgent(llm, verbose=verbose)
     print(f"[SUCCESS] Autonomous agent created successfully")
     return agent
+
+def create_fast_agent():
+    """Create agent quickly without connection testing - for UI responsiveness."""
+    return create_autonomous_agent(fast_mode=True, verbose=False)
 
 
 # Usage Example
