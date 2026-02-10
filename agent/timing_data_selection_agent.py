@@ -394,136 +394,44 @@ class AutonomousExplorationEngine:
                             print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Failed - {result.get('error', 'Unknown error')}")
                             algorithm_scores[alg_name] = 0.0
 
-                    # 6. DBSCAN clustering with adaptive parameters
-                    print(f"[\033[93mEXECUTE\033[0m] Algorithm 6/6: Adaptive DBSCAN...")
+                    # Process autonomous algorithm results
+                    if tested_algorithms:
+                        # Determine best algorithm from autonomous testing
+                        best_algorithm = max(algorithm_scores, key=algorithm_scores.get) if algorithm_scores else 'unknown'
+                        best_score = algorithm_scores.get(best_algorithm, 0.0)
 
-                    # Adaptive parameter selection for DBSCAN
-                    from sklearn.neighbors import NearestNeighbors
+                        print(f"[\033[93mEXECUTE\033[0m] Algorithm Performance Comparison:")
+                        for alg, score in sorted(algorithm_scores.items(), key=lambda x: x[1], reverse=True):
+                            status = "[WINNER]" if alg == best_algorithm else ""
+                            print(f"[\033[93mEXECUTE\033[0m]   {alg}: {score:.3f} {status}")
 
-                    # Calculate optimal eps using k-nearest neighbors
-                    k_neighbors = max(4, min(20, int(np.log(len(X_scaled)) * 2)))
-                    nn = NearestNeighbors(n_neighbors=k_neighbors)
-                    nn.fit(X_scaled)
-                    distances, _ = nn.kneighbors(X_scaled)
+                        print(f"[\033[93mEXECUTE\033[0m] Autonomous selection: {best_algorithm} (score: {best_score:.3f})")
 
-                    # Use 85th percentile of k-distance for eps (more conservative than 90th)
-                    eps = np.percentile(distances[:, -1], 85)
+                        # Build clustering results from autonomous testing
+                        clustering_results = {}
+                        for alg_name, result in tested_algorithms.items():
+                            clustering_results[alg_name] = {
+                                'labels': result['labels'],
+                                'n_clusters': result['n_clusters'],
+                                'silhouette_score': result['silhouette_score'],
+                                'cluster_distribution': dict(zip(*np.unique(result['labels'], return_counts=True))),
+                                'parameters': result.get('parameters', {}),
+                                'reasoning': result.get('reasoning', 'Autonomous selection')
+                            }
+                            # Add algorithm-specific metrics
+                            if 'outlier_ratio' in result:
+                                clustering_results[alg_name]['outlier_ratio'] = result['outlier_ratio']
+                                clustering_results[alg_name]['n_outliers'] = result.get('n_outliers', 0)
+                            if 'aic' in result:
+                                clustering_results[alg_name]['aic'] = result['aic']
+                            if 'bic' in result:
+                                clustering_results[alg_name]['bic'] = result['bic']
 
-                    # Adaptive min_samples based on dataset size and dimensionality
-                    min_samples = max(3, min(20, int(np.log(len(X_scaled)) + X_scaled.shape[1] / 2)))
-
-                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN params: eps={eps:.3f}, min_samples={min_samples}")
-
-                    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-                    dbscan_labels = dbscan.fit_predict(X_scaled)
-
-                    # Validate DBSCAN results - reject if too many outliers
-                    outlier_ratio = np.sum(dbscan_labels == -1) / len(dbscan_labels)
-                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN outlier ratio: {outlier_ratio:.3f}")
-
-                    if outlier_ratio > 0.4:  # If >40% outliers, try more conservative parameters
-                        print(f"[\033[93mEXECUTE\033[0m] Too many outliers, trying conservative DBSCAN...")
-                        eps_conservative = np.percentile(distances[:, -1], 95)
-                        min_samples_conservative = max(min_samples, int(len(X_scaled) / 100))
-
-                        dbscan_conservative = DBSCAN(eps=eps_conservative, min_samples=min_samples_conservative)
-                        dbscan_labels_conservative = dbscan_conservative.fit_predict(X_scaled)
-                        outlier_ratio_conservative = np.sum(dbscan_labels_conservative == -1) / len(dbscan_labels_conservative)
-
-                        if outlier_ratio_conservative < outlier_ratio:
-                            dbscan_labels = dbscan_labels_conservative
-                            outlier_ratio = outlier_ratio_conservative
-                            eps = eps_conservative
-                            min_samples = min_samples_conservative
-                            print(f"[\033[93mEXECUTE\033[0m] Using conservative params: eps={eps:.3f}, min_samples={min_samples}")
-
-                    print(f"[\033[93mEXECUTE\033[0m] Final DBSCAN outlier ratio: {outlier_ratio:.3f}")
-
-                    # Calculate quality metrics
-                    kmeans_silhouette = silhouette_score(X_scaled, kmeans_labels) if len(np.unique(kmeans_labels)) > 1 else 0.0
-
-                    # For DBSCAN, calculate silhouette only on non-outlier points
-                    if len(np.unique(dbscan_labels)) > 1 and np.sum(dbscan_labels != -1) > 0:
-                        non_outlier_mask = dbscan_labels != -1
-                        if np.sum(non_outlier_mask) > 1 and len(np.unique(dbscan_labels[non_outlier_mask])) > 1:
-                            dbscan_silhouette = silhouette_score(X_scaled[non_outlier_mask], dbscan_labels[non_outlier_mask])
-                        else:
-                            dbscan_silhouette = 0.0
                     else:
-                        dbscan_silhouette = 0.0
-
-                    # Penalize DBSCAN silhouette based on outlier ratio
-                    outlier_penalty = min(1.0, outlier_ratio * 2.5)  # Heavy penalty for outliers
-                    dbscan_silhouette_adjusted = dbscan_silhouette * (1 - outlier_penalty)
-
-                    clustering_results = {
-                        'kmeans': {
-                            'labels': kmeans_labels.tolist(),
-                            'n_clusters': len(np.unique(kmeans_labels)),
-                            'silhouette_score': kmeans_silhouette,
-                            'cluster_distribution': dict(zip(*np.unique(kmeans_labels, return_counts=True)))
-                        },
-                        'gaussian_mixture': {
-                            'labels': gmm_labels.tolist(),
-                            'n_clusters': len(np.unique(gmm_labels)),
-                            'silhouette_score': gmm_silhouette,
-                            'cluster_distribution': dict(zip(*np.unique(gmm_labels, return_counts=True)))
-                        },
-                        'spectral': {
-                            'labels': spectral_labels.tolist(),
-                            'n_clusters': len(np.unique(spectral_labels)),
-                            'silhouette_score': spectral_silhouette,
-                            'cluster_distribution': dict(zip(*np.unique(spectral_labels, return_counts=True)))
-                        },
-                        'agglomerative': {
-                            'labels': agg_labels.tolist(),
-                            'n_clusters': len(np.unique(agg_labels)),
-                            'silhouette_score': agg_silhouette,
-                            'cluster_distribution': dict(zip(*np.unique(agg_labels, return_counts=True)))
-                        },
-                        'birch': {
-                            'labels': birch_labels.tolist(),
-                            'n_clusters': len(np.unique(birch_labels)),
-                            'silhouette_score': birch_silhouette,
-                            'cluster_distribution': dict(zip(*np.unique(birch_labels, return_counts=True)))
-                        },
-                        'dbscan': {
-                            'labels': dbscan_labels.tolist(),
-                            'n_clusters': len(np.unique(dbscan_labels[dbscan_labels != -1])) if len(dbscan_labels[dbscan_labels != -1]) > 0 else 0,
-                            'silhouette_score': dbscan_silhouette,
-                            'silhouette_adjusted': dbscan_silhouette_adjusted,
-                            'outliers': int(np.sum(dbscan_labels == -1)),
-                            'outlier_ratio': outlier_ratio,
-                            'outlier_penalty': outlier_penalty,
-                            'eps': eps,
-                            'min_samples': min_samples,
-                            'cluster_distribution': dict(zip(*np.unique(dbscan_labels, return_counts=True)))
-                        }
-                    }
-
-                    # Autonomous algorithm selection based on comprehensive comparison
-                    algorithm_scores = {
-                        'kmeans': kmeans_silhouette,
-                        'gaussian_mixture': gmm_silhouette,
-                        'spectral': spectral_silhouette,
-                        'agglomerative': agg_silhouette,
-                        'birch': birch_silhouette,
-                        'dbscan': dbscan_silhouette_adjusted
-                    }
-
-                    best_algorithm = max(algorithm_scores, key=algorithm_scores.get)
-                    best_score = algorithm_scores[best_algorithm]
-
-                    print(f"[\033[93mEXECUTE\033[0m] Algorithm Performance Comparison:")
-                    for alg, score in sorted(algorithm_scores.items(), key=lambda x: x[1], reverse=True):
-                        status = "[WINNER]" if alg == best_algorithm else ""
-                        print(f"[\033[93mEXECUTE\033[0m]   {alg}: {score:.3f} {status}")
-
-                    print(f"[\033[93mEXECUTE\033[0m] Autonomous selection: {best_algorithm} (score: {best_score:.3f})")
-
-                    print(f"[\033[93mEXECUTE\033[0m] KMeans: {len(np.unique(kmeans_labels))} clusters, Silhouette: {kmeans_silhouette:.3f}")
-                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN: {clustering_results['dbscan']['n_clusters']} clusters, {clustering_results['dbscan']['outliers']} outliers ({outlier_ratio:.1%})")
-                    print(f"[\033[93mEXECUTE\033[0m] DBSCAN: Raw silhouette: {dbscan_silhouette:.3f}, Adjusted: {dbscan_silhouette_adjusted:.3f} (penalty: {outlier_penalty:.3f})")
+                        print(f"[\033[91mEXECUTE\033[0m] No algorithms succeeded in autonomous testing")
+                        best_algorithm = 'none'
+                        best_score = 0.0
+                        clustering_results = {}
 
                     discoveries.update({
                         'data_shape': data.shape,
@@ -937,6 +845,10 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
             print(f"[\033[96mDISCOVERY\033[0m] Discovered {len(algorithm_suggestions)} algorithms to explore")
             for i, alg in enumerate(algorithm_suggestions):
                 print(f"[\033[96mDISCOVERY\033[0m] {i+1}. {alg['name']}: {alg['reasoning'][:100]}...")
+                # Show detailed reasoning for debugging
+                print(f"[\033[96mDETAILS\033[0m]    Full reasoning: {alg['reasoning']}")
+                if 'adaptive_params' in alg:
+                    print(f"[\033[96mDETAILS\033[0m]    Parameter strategy: {alg}")
 
             return algorithm_suggestions
 
@@ -1070,6 +982,8 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         algorithm_name = alg_config['name']
         print(f"[\033[93mEXECUTE\033[0m] Autonomous execution: {algorithm_name}")
         print(f"[\033[93mEXECUTE\033[0m] Reasoning: {alg_config['reasoning']}")
+        print(f"[\033[93mDETAILS\033[0m] Configuration: {alg_config}")
+        print(f"[\033[93mDETAILS\033[0m] Data shape: {X_scaled.shape}, variance: {np.var(X_scaled):.4f}")
 
         try:
             if algorithm_name == 'kmeans':
@@ -1352,6 +1266,28 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
 
         best_n = max(scores, key=lambda x: x[1])[0]
         return best_n
+
+    def _safe_silhouette_score(self, X: np.ndarray, labels: np.ndarray) -> float:
+        """Safe silhouette score calculation with error handling."""
+        try:
+            from sklearn.metrics import silhouette_score
+
+            # Filter out outliers for algorithms that use -1 for outliers
+            if -1 in labels:
+                mask = labels != -1
+                if np.sum(mask) < 2 or len(np.unique(labels[mask])) < 2:
+                    return 0.0
+                return silhouette_score(X[mask], labels[mask])
+
+            # Check for minimum requirements
+            if len(np.unique(labels)) < 2 or len(labels) < 2:
+                return 0.0
+
+            return silhouette_score(X, labels)
+
+        except Exception as e:
+            print(f"[\033[93mEXECUTE\033[0m] Silhouette calculation failed: {e}")
+            return 0.0
 
     async def _autonomous_recovery(self, error: str) -> Dict[str, Any]:
         """Agent autonomously recovers from errors."""
