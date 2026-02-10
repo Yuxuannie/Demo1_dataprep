@@ -861,39 +861,83 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         algorithms = []
         n_samples = len(X_scaled)
 
+        # Debug: Show raw LLM response
+        print(f"[\033[96mDEBUG\033[0m] Raw LLM response: {llm_response[:500]}...")
+
         # Extract algorithm suggestions from LLM response
         import re
         algorithm_blocks = re.split(r'ALGORITHM:', llm_response)[1:]  # Skip first empty split
 
-        for block in algorithm_blocks:
+        for i, block in enumerate(algorithm_blocks):
             try:
+                print(f"[\033[96mDEBUG\033[0m] Parsing block {i+1}: {block[:200]}...")
+
                 lines = block.strip().split('\n')
                 name = lines[0].strip().lower()
 
-                # Extract reasoning if present
-                reasoning_match = re.search(r'REASONING:\s*(.+)', block, re.IGNORECASE)
-                reasoning = reasoning_match.group(1).strip() if reasoning_match else "Autonomous selection"
+                # Clean algorithm name from markdown formatting
+                name = re.sub(r'\*+', '', name).strip()
+                print(f"[\033[96mDEBUG\033[0m] Extracted name: '{name}'")
+
+                # Extract reasoning with multi-line support
+                reasoning = self._extract_reasoning_from_block(block)
+                print(f"[\033[96mDEBUG\033[0m] Extracted reasoning: {reasoning[:150]}...")
 
                 # Map algorithm names to implementations
                 alg_config = self._map_algorithm_name_to_config(name, reasoning, n_samples)
                 if alg_config:
                     algorithms.append(alg_config)
+                    print(f"[\033[96mDEBUG\033[0m] Successfully mapped algorithm: {alg_config['name']}")
+                else:
+                    print(f"[\033[96mDEBUG\033[0m] Failed to map algorithm name: '{name}'")
 
             except Exception as e:
-                print(f"[\033[96mDISCOVERY\033[0m] Failed to parse algorithm block: {e}")
+                print(f"[\033[96mDISCOVERY\033[0m] Failed to parse algorithm block {i+1}: {e}")
+                print(f"[\033[96mDEBUG\033[0m] Problematic block: {block[:300]}...")
                 continue
 
         # Ensure at least 2 algorithms for comparison
         if len(algorithms) < 2:
+            print(f"[\033[96mDEBUG\033[0m] Only {len(algorithms)} algorithms parsed, adding fallback")
             algorithms.extend(self._fallback_algorithm_discovery(X_scaled, len(algorithms)))
 
         return algorithms[:5]  # Limit to 5 algorithms per iteration
 
+    def _extract_reasoning_from_block(self, block: str) -> str:
+        """Extract reasoning text from algorithm block, handling multi-line content."""
+        import re
+
+        # Find REASONING section
+        reasoning_match = re.search(r'REASONING:\s*(.*?)(?=PARAMETERS:|$)', block, re.IGNORECASE | re.DOTALL)
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+            # Clean up markdown formatting
+            reasoning = re.sub(r'\*+', '', reasoning)  # Remove ** formatting
+            reasoning = re.sub(r'\n+', ' ', reasoning)  # Replace newlines with spaces
+            reasoning = re.sub(r'\s+', ' ', reasoning)  # Normalize whitespace
+            return reasoning.strip()
+
+        # Fallback: try to extract any text after algorithm name
+        lines = block.strip().split('\n')
+        if len(lines) > 1:
+            potential_reasoning = ' '.join(lines[1:])
+            potential_reasoning = re.sub(r'\*+', '', potential_reasoning)
+            potential_reasoning = re.sub(r'REASONING:\s*', '', potential_reasoning, flags=re.IGNORECASE)
+            potential_reasoning = re.sub(r'PARAMETERS:.*', '', potential_reasoning, flags=re.IGNORECASE)
+            return potential_reasoning.strip() or "Autonomous selection based on data characteristics"
+
+        return "Autonomous selection based on data characteristics"
+
     def _map_algorithm_name_to_config(self, name: str, reasoning: str, n_samples: int) -> Dict[str, Any]:
         """Map algorithm name from LLM to executable configuration."""
-        name = name.lower().replace('-', '').replace('_', '').replace(' ', '')
+        # Clean the name thoroughly
+        original_name = name
+        name = name.lower().replace('-', '').replace('_', '').replace(' ', '').replace('.', '')
 
-        algorithm_map = {
+        print(f"[\033[96mDEBUG\033[0m] Mapping algorithm: '{original_name}' -> '{name}'")
+
+        # Algorithm mapping with multiple aliases
+        algorithm_configs = {
             'kmeans': {
                 'name': 'kmeans',
                 'reasoning': reasoning,
@@ -912,13 +956,13 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
                 'adaptive_params': True,
                 'n_components_range': [2, min(15, n_samples//150)]
             },
-            'spectralclustering': {
+            'spectral': {
                 'name': 'spectral',
                 'reasoning': reasoning,
                 'adaptive_params': True,
                 'n_clusters_range': [3, min(12, n_samples//200)]
             },
-            'agglomerativeclustering': {
+            'agglomerative': {
                 'name': 'agglomerative',
                 'reasoning': reasoning,
                 'adaptive_params': True,
@@ -932,11 +976,32 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
             }
         }
 
-        # Fuzzy matching for common variations
-        for key in algorithm_map:
-            if key in name or name in key:
-                return algorithm_map[key]
+        # Algorithm name aliases for better matching
+        algorithm_aliases = {
+            'kmeans': ['kmeans', 'k-means', 'k_means', 'kmeanscluster'],
+            'dbscan': ['dbscan', 'db-scan', 'db_scan', 'densitybased', 'density'],
+            'gmm': ['gmm', 'gaussianmixture', 'gaussian_mixture', 'gaussian', 'mixture'],
+            'spectral': ['spectral', 'spectralclustering', 'spectral_clustering', 'spectralcluster'],
+            'agglomerative': ['agglomerative', 'agglomerativeclustering', 'hierarchical', 'hierarchy'],
+            'birch': ['birch', 'birchclustering', 'birch_clustering']
+        }
 
+        # First, try exact matches in aliases
+        for alg_key, aliases in algorithm_aliases.items():
+            for alias in aliases:
+                if name == alias.lower().replace('-', '').replace('_', '').replace(' ', ''):
+                    print(f"[\033[96mDEBUG\033[0m] Exact match found: {alg_key}")
+                    return algorithm_configs[alg_key]
+
+        # Then try partial matches
+        for alg_key, aliases in algorithm_aliases.items():
+            for alias in aliases:
+                alias_clean = alias.lower().replace('-', '').replace('_', '').replace(' ', '')
+                if alias_clean in name or name in alias_clean:
+                    print(f"[\033[96mDEBUG\033[0m] Partial match found: {alg_key} (via {alias})")
+                    return algorithm_configs[alg_key]
+
+        print(f"[\033[96mDEBUG\033[0m] No match found for: '{name}'")
         return None
 
     def _fallback_algorithm_discovery(self, X_scaled: np.ndarray, existing_count: int) -> List[Dict[str, Any]]:
