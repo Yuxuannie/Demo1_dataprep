@@ -89,24 +89,24 @@ st.markdown("""
 def initialize_agent():
     """Initialize timing-aware agent with error handling."""
     try:
-        from agent.real_timing_agent import RealTimingDataSelectionAgent as TimingDataSelectionAgent
-        # Import LLM functions from original for compatibility
+        from agent.timing_data_selection_agent import TimingDataSelectionAgent
+
+        # Try to import LLM functions for enhanced reasoning
         try:
-            from agent.timing_data_selection_agent import initialize_timing_llm, test_ollama_connection
+            from agent.timing_data_selection_agent_original_FAKE import initialize_timing_llm, test_ollama_connection
+
+            # Test Ollama connection for enhanced LLM reasoning
+            if test_ollama_connection():
+                llm = initialize_timing_llm()
+                print("[INFO] LLM connected - will use for high-level reasoning with real data")
+            else:
+                llm = None
+                print("[INFO] LLM not available - using statistical analysis only")
         except:
-            # Fallback functions if original import fails
-            def test_ollama_connection():
-                return True
-            def initialize_timing_llm():
-                return None
+            llm = None
+            print("[INFO] LLM functions not available - using statistical analysis only")
 
-        # Test Ollama connection
-        if not test_ollama_connection():
-            st.error("[ERROR] Cannot connect to Ollama. Please ensure Ollama is running: `ollama serve`")
-            return None
-
-        # Initialize LLM and agent
-        llm = initialize_timing_llm()
+        # Real intelligence agent with optional LLM reasoning
         agent = TimingDataSelectionAgent(llm=llm, verbose=True)
 
         return agent
