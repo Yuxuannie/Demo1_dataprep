@@ -538,33 +538,90 @@ Answer with specific strategy recommendations based on the numerical evidence ab
 
     # UI Interface methods for compatibility
     def classify_user_intent(self, user_input: str) -> Tuple[UserIntent, Dict[str, Any]]:
-        """Simple intent classification for UI compatibility"""
-        user_input_lower = user_input.lower()
+        """Classify user intent to determine whether to execute pipeline or answer from context."""
+        import re
+        input_lower = user_input.lower().strip()
 
-        if any(word in user_input_lower for word in ['select', 'sample', 'choose', 'pick']):
-            # Extract percentage if mentioned
-            import re
-            percentage_match = re.search(r'(\d+(?:\.\d+)?)%', user_input)
-            percentage = float(percentage_match.group(1)) if percentage_match else 5.0
+        # Intent patterns with priorities (most specific first)
+        intent_patterns = {
+            UserIntent.QUESTION_ABOUT_RESULTS: [
+                r'why did you (choose|pick|select)',
+                r'why.*(\d+)%',
+                r'explain (the|your) (selection|choice|decision)',
+                r'how did you (determine|decide|choose)',
+                r'what (made you|criteria)',
+                r'can you explain why',
+                r'reasoning behind',
+                r'rationale for'
+            ],
+            UserIntent.EXPLAIN_METHODOLOGY: [
+                r'how does.*work',
+                r'explain.*methodology',
+                r'what.*algorithm',
+                r'how.*clustering',
+                r'explain.*approach'
+            ],
+            UserIntent.MODIFY_PARAMETERS: [
+                r'change.*percent',
+                r'use.*percent',
+                r'try.*different',
+                r'modify.*selection',
+                r'adjust.*parameter'
+            ]
+        }
 
-            return UserIntent.EXECUTE_SAMPLING, {'percentage': percentage}
+        # Extract parameters from user input
+        params = self._extract_parameters_from_input(user_input)
 
-        elif any(word in user_input_lower for word in ['why', 'how', 'explain', 'reason']):
-            return UserIntent.EXPLAIN_METHODOLOGY, {}
+        # Check for specific intent patterns
+        for intent, patterns in intent_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, input_lower):
+                    return intent, params
 
-        elif any(word in user_input_lower for word in ['show', 'display', 'visualize', 'plot']):
-            return UserIntent.REQUEST_VISUALIZATION, {}
+        # Check for simple execution patterns
+        if any(word in input_lower for word in ['select', 'sample', 'choose', 'pick']):
+            return UserIntent.EXECUTE_SAMPLING, params
 
-        elif any(word in user_input_lower for word in ['change', 'modify', 'adjust']):
-            # Extract new percentage if mentioned
-            import re
-            percentage_match = re.search(r'(\d+(?:\.\d+)?)%', user_input)
-            percentage = float(percentage_match.group(1)) if percentage_match else None
+        # Default to execution if no conversational intent detected
+        return UserIntent.EXECUTE_SAMPLING, params
 
-            return UserIntent.MODIFY_PARAMETERS, {'new_percentage': percentage}
+    def _extract_parameters_from_input(self, user_input: str) -> Dict[str, Any]:
+        """Extract parameters like percentage, algorithm, etc. from user input."""
+        import re
+        params = {}
 
-        else:
-            return UserIntent.GENERAL_HELP, {}
+        # Extract percentage
+        percentage_patterns = [
+            r'(\d+(?:\.\d+)?)\s*%',
+            r'(\d+(?:\.\d+)?)\s*percent',
+            r'select\s+(\d+(?:\.\d+)?)'
+        ]
+
+        for pattern in percentage_patterns:
+            match = re.search(pattern, user_input.lower())
+            if match:
+                params['percentage'] = float(match.group(1))
+                break
+
+        # Default percentage if not found
+        if 'percentage' not in params:
+            params['percentage'] = 5.0
+
+        # Extract algorithm preferences
+        algorithm_keywords = {
+            'kmeans': 'kmeans',
+            'gaussian': 'gaussian_mixture',
+            'dbscan': 'dbscan',
+            'spectral': 'spectral_clustering'
+        }
+
+        for keyword, algorithm in algorithm_keywords.items():
+            if keyword in user_input.lower():
+                params['preferred_algorithm'] = algorithm
+                break
+
+        return params
 
     def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
         """Synchronous wrapper for UI compatibility"""
@@ -674,3 +731,115 @@ Answer with specific strategy recommendations based on the numerical evidence ab
         """
 
         return html_content
+
+    # ============================================================================
+    # CONVERSATION HANDLING METHODS (for chatbot functionality)
+    # ============================================================================
+
+    def add_message(self, role: str, content: str):
+        """Add message to conversation history."""
+        import pandas as pd
+        self.conversation_history.append({
+            'role': role,
+            'content': content,
+            'timestamp': pd.Timestamp.now()
+        })
+
+    def get_conversation_history(self) -> List[Dict[str, Any]]:
+        """Get conversation history."""
+        return self.conversation_history
+
+    def handle_conversation(self, user_query: str) -> Dict[str, Any]:
+        """Handle conversational questions about results without re-running selection."""
+
+        # Classify user intent
+        intent, params = self.classify_user_intent(user_query)
+
+        if intent == UserIntent.QUESTION_ABOUT_RESULTS:
+            # Generate response based on conversation history
+            context = "\n".join([msg['content'] for msg in self.conversation_history[-5:]])
+
+            question_prompt = f"""Based on our previous conversation about timing data selection, answer this follow-up question:
+
+User Question: {user_query}
+
+Recent Context:
+{context}
+
+Provide a clear, technical explanation addressing their specific question about the selection methodology, results, or reasoning. Use plain text only."""
+
+            try:
+                if self.llm:
+                    response = self.llm.invoke({"input": question_prompt})
+
+                    if hasattr(response, 'content'):
+                        response_text = response.content
+                    else:
+                        response_text = str(response)
+                else:
+                    response_text = "I understand you're asking about the selection results. Without LLM integration, I can provide basic information from the analysis."
+
+                self.add_message('assistant', response_text)
+
+                return {
+                    'type': 'conversational_response',
+                    'intent': intent.value,
+                    'response': response_text,
+                    'parameters': params
+                }
+
+            except Exception as e:
+                return {
+                    'type': 'conversational_response',
+                    'intent': intent.value,
+                    'response': f"I understand you're asking about the selection results, but I encountered an error: {e}",
+                    'parameters': params
+                }
+
+        elif intent == UserIntent.EXPLAIN_METHODOLOGY:
+            # Explain methodology without running selection
+            methodology_prompt = f"""Explain the timing data selection methodology to address this question:
+
+{user_query}
+
+Provide a technical explanation of the algorithms, approaches, and reasoning behind the methodology. Focus on the specific aspect they're asking about."""
+
+            try:
+                if self.llm:
+                    response = self.llm.invoke({"input": methodology_prompt})
+
+                    if hasattr(response, 'content'):
+                        response_text = response.content
+                    else:
+                        response_text = str(response)
+                else:
+                    response_text = """The methodology uses real statistical analysis including:
+1. Hopkins statistic for clustering tendency
+2. Evidence-based algorithm selection (KMeans, DBSCAN, etc.)
+3. Structure-preserving sampling strategies
+4. Quality assessment with coverage and distribution preservation metrics"""
+
+                self.add_message('assistant', response_text)
+
+                return {
+                    'type': 'methodology_explanation',
+                    'intent': intent.value,
+                    'response': response_text,
+                    'parameters': params
+                }
+
+            except Exception as e:
+                return {
+                    'type': 'methodology_explanation',
+                    'intent': intent.value,
+                    'response': f"I can explain the methodology, but encountered an error: {e}",
+                    'parameters': params
+                }
+
+        else:
+            # For other intents, indicate that selection should be run
+            return {
+                'type': 'requires_execution',
+                'intent': intent.value,
+                'parameters': params
+            }
