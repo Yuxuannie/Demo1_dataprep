@@ -356,12 +356,26 @@ class AutonomousExplorationEngine:
                         'correlations': np.corrcoef(X.T).tolist() if X.shape[1] > 1 else [[1.0]]
                     }
 
+                    # PERFORMANCE OPTIMIZATION: Sample data for large datasets
+                    if len(X_scaled) > 5000:
+                        print(f"[\033[93mOPTIMIZE\033[0m] Large dataset detected ({len(X_scaled)} samples), sampling 5000 for faster processing")
+                        sample_indices = np.random.choice(len(X_scaled), size=5000, replace=False)
+                        X_sample = X_scaled[sample_indices]
+                        sample_mode = True
+                    else:
+                        X_sample = X_scaled
+                        sample_mode = False
+
                     # Autonomous algorithm discovery and selection
                     clustering_results = {}
                     print(f"[\033[93mEXECUTE\033[0m] Agent autonomously discovering and generating clustering strategies...")
 
                     # Let the agent decide what algorithms to try based on data characteristics
-                    algorithm_suggestions = await self._autonomous_algorithm_discovery(X_scaled, iteration)
+                    algorithm_suggestions = await self._autonomous_algorithm_discovery(X_sample, iteration)
+
+                    # PERFORMANCE: Limit to 3 algorithms per iteration for speed
+                    algorithm_suggestions = algorithm_suggestions[:3]
+                    print(f"[\033[93mOPTIMIZE\033[0m] Testing {len(algorithm_suggestions)} algorithms for optimal performance")
 
                     # Agent generates and tests algorithms autonomously
                     algorithm_scores = {}
@@ -371,27 +385,39 @@ class AutonomousExplorationEngine:
                         alg_name = alg_config['name']
                         print(f"[\033[93mEXECUTE\033[0m] Algorithm {i+1}/{len(algorithm_suggestions)}: {alg_name}")
 
-                        # Agent attempts to execute the algorithm
-                        result = await self._autonomous_algorithm_execution(alg_config, X_scaled)
+                        try:
+                            # Add timeout for algorithm execution
+                            import asyncio
+                            result = await asyncio.wait_for(
+                                self._autonomous_algorithm_execution(alg_config, X_sample),
+                                timeout=60.0  # 60 second timeout per algorithm
+                            )
 
-                        if result['success']:
-                            labels = result['labels']
-                            silhouette = result['silhouette_score']
-                            algorithm_scores[alg_name] = silhouette
-                            tested_algorithms[alg_name] = result
+                            if result['success']:
+                                labels = result['labels']
+                                silhouette = result['silhouette_score']
+                                algorithm_scores[alg_name] = silhouette
+                                tested_algorithms[alg_name] = result
 
-                            print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: {result['n_clusters']} clusters, silhouette: {silhouette:.3f}")
+                                print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: {result['n_clusters']} clusters, silhouette: {silhouette:.3f}")
 
-                            # Special handling for density-based algorithms with outliers
-                            if 'outlier_ratio' in result:
-                                outlier_ratio = result['outlier_ratio']
-                                if outlier_ratio > 0.3:
-                                    adjusted_score = silhouette * (1 - min(1.0, outlier_ratio * 2.5))
-                                    algorithm_scores[alg_name] = adjusted_score
-                                    print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Adjusted score: {adjusted_score:.3f} (outlier penalty: {outlier_ratio:.1%})")
+                                # Special handling for density-based algorithms with outliers
+                                if 'outlier_ratio' in result:
+                                    outlier_ratio = result['outlier_ratio']
+                                    if outlier_ratio > 0.3:
+                                        adjusted_score = silhouette * (1 - min(1.0, outlier_ratio * 2.5))
+                                        algorithm_scores[alg_name] = adjusted_score
+                                        print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Adjusted score: {adjusted_score:.3f} (outlier penalty: {outlier_ratio:.1%})")
 
-                        else:
-                            print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Failed - {result.get('error', 'Unknown error')}")
+                            else:
+                                print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Failed - {result.get('error', 'Unknown error')}")
+                                algorithm_scores[alg_name] = 0.0
+
+                        except asyncio.TimeoutError:
+                            print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Timeout after 60s")
+                            algorithm_scores[alg_name] = 0.0
+                        except Exception as e:
+                            print(f"[\033[93mEXECUTE\033[0m]   {alg_name}: Error - {e}")
                             algorithm_scores[alg_name] = 0.0
 
                     # Process autonomous algorithm results
@@ -1110,19 +1136,33 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         from sklearn.neighbors import NearestNeighbors
 
         if config.get('adaptive_params', False):
-            # Autonomous parameter selection using k-NN
-            print(f"[\033[93mEXECUTE\033[0m] DBSCAN adaptive parameter selection")
-            k = min(10, len(X_scaled) // 100)
+            # OPTIMIZED: Fast parameter selection using k-NN
+            print(f"[\033[93mEXECUTE\033[0m] DBSCAN adaptive parameter selection (fast mode)")
+
+            # Use smaller k for speed and sample subset if dataset is large
+            k = min(5, len(X_scaled) // 200)  # Reduced from 10 and 100
+            k = max(3, k)  # Minimum k
+
+            # Sample for parameter estimation if dataset is large
+            if len(X_scaled) > 1000:
+                sample_size = min(1000, len(X_scaled))
+                sample_idx = np.random.choice(len(X_scaled), size=sample_size, replace=False)
+                X_param_sample = X_scaled[sample_idx]
+            else:
+                X_param_sample = X_scaled
+
             neighbors = NearestNeighbors(n_neighbors=k)
-            neighbors_fit = neighbors.fit(X_scaled)
-            distances, indices = neighbors_fit.kneighbors(X_scaled)
+            neighbors_fit = neighbors.fit(X_param_sample)
+            distances, indices = neighbors_fit.kneighbors(X_param_sample)
             distances = np.sort(distances[:, k-1], axis=0)
 
-            # Find elbow point for eps
-            knee_idx = len(distances) // 2
+            # Fast elbow estimation
+            knee_idx = int(len(distances) * 0.8)  # 80th percentile instead of 50th
             eps = distances[knee_idx]
-            eps = max(0.1, min(eps, 2.0))  # Reasonable bounds
-            min_samples = max(5, k)
+            eps = max(0.1, min(eps, 1.5))  # Tighter bounds for speed
+            min_samples = max(3, k)  # Reduced minimum
+
+            print(f"[\033[93mOPTIMIZE\033[0m] Fast DBSCAN params: eps={eps:.3f}, min_samples={min_samples}")
         else:
             eps = config.get('eps', 0.5)
             min_samples = config.get('min_samples', 5)
@@ -1280,56 +1320,81 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         }
 
     async def _find_optimal_k_autonomous(self, X_scaled: np.ndarray, k_range: List[int]) -> int:
-        """Autonomous optimal k selection using multiple criteria."""
+        """Autonomous optimal k selection using multiple criteria - OPTIMIZED FOR SPEED."""
         from sklearn.cluster import KMeans
 
-        scores = []
         k_min, k_max = k_range[0], k_range[1]
-        k_max = min(k_max, len(X_scaled) // 10)  # Reasonable upper bound
+        k_max = min(k_max, len(X_scaled) // 10, 8)  # Limit to max 8 for speed
 
-        for k in range(k_min, k_max + 1):
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=5)
-            labels = kmeans.fit_predict(X_scaled)
+        # SPEED OPTIMIZATION: Test only 3-5 values instead of full range
+        if k_max - k_min > 4:
+            test_k_values = [k_min, (k_min + k_max) // 2, k_max]
+        else:
+            test_k_values = list(range(k_min, k_max + 1))
 
-            # Combined scoring: silhouette + inertia balance
-            sil_score = self._safe_silhouette_score(X_scaled, labels)
-            inertia = kmeans.inertia_
+        print(f"[\033[93mOPTIMIZE\033[0m] Testing k values: {test_k_values} (fast mode)")
 
-            # Penalize too many clusters for timing data
-            cluster_penalty = max(0, (k - 8) * 0.1)  # Penalize k > 8
-            combined_score = sil_score - cluster_penalty
+        best_k = k_min
+        best_score = -1
 
-            scores.append((k, combined_score, sil_score))
+        for k in test_k_values:
+            try:
+                # Reduce n_init for speed
+                kmeans = KMeans(n_clusters=k, random_state=42, n_init=3, max_iter=100)
+                labels = kmeans.fit_predict(X_scaled)
 
-        # Select best k
-        best_k = max(scores, key=lambda x: x[1])[0]
+                # Fast scoring
+                sil_score = self._safe_silhouette_score(X_scaled, labels)
+                cluster_penalty = max(0, (k - 6) * 0.1)  # Penalize k > 6
+                combined_score = sil_score - cluster_penalty
+
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_k = k
+
+                print(f"[\033[93mOPTIMIZE\033[0m]   k={k}: score={combined_score:.3f}")
+
+            except Exception as e:
+                print(f"[\033[93mOPTIMIZE\033[0m]   k={k}: failed ({e})")
+                continue
+
         return best_k
 
     async def _find_optimal_gmm_components_autonomous(self, X_scaled: np.ndarray, n_range: List[int]) -> int:
-        """Autonomous optimal GMM components using BIC/AIC."""
+        """Autonomous optimal GMM components using BIC/AIC - OPTIMIZED FOR SPEED."""
         from sklearn.mixture import GaussianMixture
 
         n_min, n_max = n_range[0], n_range[1]
-        n_max = min(n_max, len(X_scaled) // 20)  # Conservative upper bound
+        n_max = min(n_max, len(X_scaled) // 20, 6)  # Limit to max 6 for speed
 
-        scores = []
-        for n in range(n_min, n_max + 1):
+        # SPEED OPTIMIZATION: Test only 3 values
+        if n_max - n_min > 3:
+            test_n_values = [n_min, (n_min + n_max) // 2, n_max]
+        else:
+            test_n_values = list(range(n_min, n_max + 1))
+
+        print(f"[\033[93mOPTIMIZE\033[0m] Testing GMM components: {test_n_values} (fast mode)")
+
+        best_n = n_min
+        best_score = float('inf')
+
+        for n in test_n_values:
             try:
-                gmm = GaussianMixture(n_components=n, random_state=42)
+                # Reduce iterations for speed
+                gmm = GaussianMixture(n_components=n, random_state=42, max_iter=50)
                 gmm.fit(X_scaled)
                 bic = gmm.bic(X_scaled)
-                aic = gmm.aic(X_scaled)
 
-                # Prefer BIC for model selection (more conservative)
-                scores.append((n, -bic, -aic))  # Negative because we want to minimize
+                if bic < best_score:
+                    best_score = bic
+                    best_n = n
+
+                print(f"[\033[93mOPTIMIZE\033[0m]   n={n}: BIC={bic:.1f}")
+
             except Exception as e:
-                print(f"[\033[93mEXECUTE\033[0m] GMM failed for n={n}: {e}")
+                print(f"[\033[93mOPTIMIZE\033[0m]   n={n}: failed ({e})")
                 continue
 
-        if not scores:
-            return n_min
-
-        best_n = max(scores, key=lambda x: x[1])[0]
         return best_n
 
     def _safe_silhouette_score(self, X: np.ndarray, labels: np.ndarray) -> float:
