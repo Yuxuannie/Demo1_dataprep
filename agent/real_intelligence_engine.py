@@ -33,7 +33,7 @@ class DataCharacteristicsAnalyzer:
             return {'error': 'No numeric columns found'}
 
         if self.verbose:
-            print(f"   Analyzing {len(numeric_data)} samples with {len(numeric_data.columns)} features")
+            print(f"   \033[35mOBSERVATION:\033[0m Analyzing {len(numeric_data)} samples with {len(numeric_data.columns)} features")
 
         characteristics = {}
 
@@ -50,7 +50,9 @@ class DataCharacteristicsAnalyzer:
 
         for step_name, step_func in steps:
             if self.verbose:
-                print(f"   Running {step_name.replace('_', ' ')}...")
+                # Color-coded progress messages
+                step_display = step_name.replace('_', ' ').title()
+                print(f"   \033[36mANALYSIS:\033[0m {step_display}...")
             characteristics[step_name] = step_func(numeric_data)
 
         return characteristics
@@ -190,7 +192,7 @@ class DataCharacteristicsAnalyzer:
         silhouette_scores = []
 
         if self.verbose:
-            print(f"   Evaluating k-values: {list(k_range)} (n_init={n_init})")
+            print(f"   \033[33mACTION:\033[0m Evaluating k-values: {list(k_range)} (n_init={n_init})")
 
         for k in k_range:
             if k >= len(data):
@@ -213,11 +215,11 @@ class DataCharacteristicsAnalyzer:
                     silhouette_scores.append(-1)
 
                 if self.verbose:
-                    print(f"   k={k}: silhouette={silhouette_scores[-1]:.3f}")
+                    print(f"   \033[32mRESULT:\033[0m k={k}: silhouette={silhouette_scores[-1]:.3f}")
 
             except Exception as e:
                 if self.verbose:
-                    print(f"   k={k}: failed ({e})")
+                    print(f"   \033[31mERROR:\033[0m k={k}: failed ({e})")
                 silhouette_scores.append(-1)
 
         # Find optimal k

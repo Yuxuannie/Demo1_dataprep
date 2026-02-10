@@ -105,20 +105,20 @@ class RealIntelligenceExplorationEngine:
             return {'error': 'Machine learning libraries not available'}
 
         if self.verbose:
-            print(f"   Starting deep statistical analysis of {len(data)} samples...")
+            print(f"   \033[35mOBSERVATION:\033[0m Starting deep statistical analysis of {len(data)} samples...")
 
         # Step 1: Deep data analysis - REAL intelligence
         characteristics = self.data_analyzer.analyze_dataset(data)
 
         if self.verbose:
-            print(f"   Data analysis completed in {time.time() - start_time:.2f}s")
-            print(f"   Generating evidence-based insights...")
+            print(f"   \033[32mCOMPLETED:\033[0m Data analysis in {time.time() - start_time:.2f}s")
+            print(f"   \033[36mREASONING:\033[0m Generating evidence-based insights...")
 
         # Step 2: Evidence-based reasoning - REAL intelligence
         reasoning = self.reasoning_engine.generate_evidence_based_insight(characteristics)
 
         if self.verbose:
-            print(f"   Determining optimal strategy...")
+            print(f"   \033[33mACTION:\033[0m Determining optimal strategy...")
 
         # Step 3: Data-driven strategy selection - REAL intelligence
         strategy = self.reasoning_engine.determine_optimal_strategy(characteristics)
@@ -400,13 +400,14 @@ Answer with specific strategy recommendations based on the numerical evidence ab
             self.current_data, target_percentage
         )
 
-        # Phase 2: LLM High-Level Reasoning (with real data, not fake thoughts)
+        # Phase 2: High-Level Reasoning (with real data, not fake thoughts)
+        print(f"\n[PHASE 2] \033[36mLLM REASONING\033[0m ABOUT REAL DATA")
         if self.llm:
-            print(f"\n[PHASE 2] LLM REASONING ABOUT REAL DATA")
             llm_reasoning = self.llm_reason_about_data(exploration_results['data_characteristics'])
             print(f"[LLM-REASONING] {llm_reasoning}")
         else:
-            llm_reasoning = "LLM not available - using statistical analysis only"
+            llm_reasoning = "Statistical analysis complete - proceeding with evidence-based strategy"
+            print(f"[STATISTICAL-REASONING] LLM not available, using computed data characteristics for decisions")
 
         # Phase 3: Evidence-Based Experimentation
         print(f"\n[PHASE 3] INTELLIGENT ALGORITHM SELECTION AND TESTING")
