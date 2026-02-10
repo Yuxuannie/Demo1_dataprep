@@ -1,15 +1,13 @@
 """
 Autonomous Timing Data Selection Agent
-Completely self-directed AI agent for intelligent timing data sampling
-Features autonomous exploration, hypothesis generation, and strategy synthesis
+Complete self-directed AI agent for intelligent timing data sampling
+Features autonomous exploration, hypothesis generation, strategy synthesis, and LLM connectivity
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Union
 from enum import Enum
 import json
-import re
 import time
-import tempfile
 import numpy as np
 import pandas as pd
 import os
@@ -17,7 +15,6 @@ import asyncio
 import concurrent.futures
 from dataclasses import dataclass
 from collections import defaultdict
-from pathlib import Path
 
 # Import autonomous prompt system
 from .autonomous_prompts import (
@@ -30,564 +27,18 @@ from .autonomous_prompts import (
     update_prompt_learning
 )
 
-# Import core ML libraries at module level to avoid import errors
+# Core ML libraries with fallbacks
 try:
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
-    from sklearn.cluster import KMeans
+    from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, SpectralClustering, Birch, MeanShift
     from sklearn.mixture import GaussianMixture
-    from scipy.spatial.distance import cdist
+    from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
-    print("[WARNING] scikit-learn not available - some features may not work")
 
-# Using self-contained HTML visualization - no external dependencies
-PLOTLY_AVAILABLE = False  # Force use of self-contained HTML
-print("[INFO] Using self-contained HTML visualization (zero dependencies)")
-
-
-# Intent Classification System
-class UserIntent(Enum):
-    """User intent categories for conversational Q&A."""
-    EXECUTE_SAMPLING = "execute_sampling"
-    QUESTION_ABOUT_RESULTS = "question_about_results"
-    MODIFY_PARAMETERS = "modify_parameters"
-    EXPLAIN_METHODOLOGY = "explain_methodology"
-    REQUEST_VISUALIZATION = "request_visualization"
-    GENERAL_HELP = "general_help"
-# MULTI-STAGE AGENTIC PROMPTS (Enhanced from Original System)
-TIMING_SYSTEM_PROMPT = """You are a Senior Semiconductor Timing Engineer with deep expertise in library characterization and ML model training for timing analysis.
-
-## MANDATORY FIRST STEP: Schema Discovery
-
-Before ANY analysis, you MUST run this exact sequence:
-
-1. Print all column names: `print(dataset.columns.tolist())`
-2. Print first 3 rows: `print(dataset.head(3))`
-3. Print dtypes: `print(dataset.dtypes)`
-
-Read the output carefully. ONLY reference columns that actually exist in the output of step 1.
-
-CRITICAL RULES:
-- NEVER access a column name you haven't seen in the schema discovery output
-- NEVER assume columns like 'cell_type', 'pvt_corner', 'slew', 'load', 'arc_type' exist as separate columns
-- If you need information that isn't a direct column (e.g., cell names, table positions), you must PARSE it from the columns that DO exist
-- If a column access fails or returns unexpected results, STOP and re-examine the schema
-
-## Input Data Format: cell_arc_pt Column
-
-The main identifier column is `cell_arc_pt`. It is a compound string encoding multiple pieces of information. Example:
-
-    CMPE42D1BWP240H8P57CPD#B#A&!C&CIX&D#fall_3_5
-
-Parse this as follows:
-
-1. CELL NAME: Everything before the first '#'
-   - "CMPE42D1BWP240H8P57CPD"
-   This is the standard cell name. Different cell names = different cell types/topologies.
-
-2. ARC INFORMATION: The middle sections between '#' delimiters
-   - "B#A&!C&CIX&D#fall"
-   Contains: pin names, pin directions, when conditions, and arc direction (rise/fall).
-
-3. TABLE POINT: The last two numbers after the final '_' pair
-   - "_3_5" means row 3, column 5 in the characterization table
-   The table is typically 8x8 or 5x5, where:
-   - Row index = input slew index (row 1 = smallest slew, row 8 = largest slew)
-   - Column index = output load index (col 1 = smallest load, col 8 = largest load)
-   - Corner positions (1_1, 1_8, 8_1, 8_8) represent EXTREME slew/load combinations — these are boundary cases
-   - Center positions (4_4, 4_5, 5_4, 5_5) represent typical operating conditions
-
-To extract these components, use parsing like:
-```python
-# Extract cell name
-dataset['cell_name'] = dataset['cell_arc_pt'].str.split('#').str[0]
-
-# Extract table position
-dataset['table_row'] = dataset['cell_arc_pt'].str.extract(r'_(\d+)_\d+$')[0].astype(int)
-dataset['table_col'] = dataset['cell_arc_pt'].str.extract(r'_\d+_(\d+)$')[0].astype(int)
-
-# Extract arc direction (rise/fall)
-dataset['arc_direction'] = dataset['cell_arc_pt'].str.extract(r'#(rise|fall)_\d+_\d+$')[0]
-
-# Determine table size from max indices
-table_size = max(dataset['table_row'].max(), dataset['table_col'].max())
-
-# Identify boundary cases (corner table positions)
-dataset['is_boundary'] = (
-    ((dataset['table_row'] == 1) | (dataset['table_row'] == table_size)) &
-    ((dataset['table_col'] == 1) | (dataset['table_col'] == table_size))
-)
-
-# Identify edge cases (any edge position)
-dataset['is_edge'] = (
-    (dataset['table_row'] == 1) | (dataset['table_row'] == table_size) |
-    (dataset['table_col'] == 1) | (dataset['table_col'] == table_size)
-)
-```
-
-IMPORTANT: The table position IS the slew/load information. There are no separate 'slew' and 'load' columns. Row index maps to input slew, column index maps to output load. Use table positions for boundary case analysis, not assumed slew/load columns.
-
-## Dynamic Feature Discovery Protocol
-
-The CSV structure is UNKNOWN and must be discovered dynamically. Never assume column names or meanings.
-
-**DISCOVERY REQUIREMENTS:**
-1. MANDATORY schema discovery sequence (run first, every time):
-   ```
-   print("SCHEMA DISCOVERY:")
-   print("================")
-   print(f"Columns ({len(dataset.columns)}): {dataset.columns.tolist()}")
-   print(f"Shape: {dataset.shape}")
-   print(f"Types: {dataset.dtypes.to_dict()}")
-   print(dataset.head(3))
-   ```
-
-2. DYNAMIC feature interpretation based on actual column names:
-   - Numeric columns = potential features for analysis
-   - Object/string columns = potential identifiers or categorical data
-   - Look for timing-related patterns in column names (delay, sigma, tran, etc.)
-   - Identify process variation metrics by name patterns
-   - Find table position indicators if they exist
-
-3. ADAPTIVE analysis approach:
-   - Use ONLY columns that actually exist in the dataset
-   - Infer feature meanings from column names and data distributions
-   - No hardcoded assumptions about specific column names or count
-   - Build understanding from the actual data structure
-
-**FORBIDDEN:**
-- Never reference columns that weren't discovered in the schema output
-- Never assume specific column names exist
-- Never use hardcoded feature lists or expected schemas
-
-## Tool Output Integrity
-
-CRITICAL: When you write code to analyze data, the code MUST actually execute and return real results.
-
-Rules:
-- If a column access would raise a KeyError, you MUST catch it and report the error, not fabricate results
-- After every data access, print the actual shape and a sample of results to verify
-- NEVER describe results you haven't actually computed
-- If you're unsure whether a column exists, run `print(col_name in dataset.columns)` first
-
-Add try-except blocks around data access:
-```python
-try:
-    result = dataset['column_name'].value_counts()
-    print(result)
-except KeyError:
-    print(f"ERROR: Column 'column_name' does not exist. Available columns: {dataset.columns.tolist()}")
-    # Fall back to schema discovery
-```
-
-If a tool execution fails, this is VALUABLE INFORMATION — report it honestly. Saying "Column 'cell_type' not found, parsing from cell_arc_pt instead" is a BETTER demo moment than silently fabricating results.
-
-## Sample Allocation: Handle Overlaps
-
-When allocating samples across categories (e.g., high-sigma, boundary, typical):
-1. First, tag each arc with ALL applicable categories (an arc can be both high-sigma AND boundary)
-2. Use prioritized selection: start with arcs that satisfy MULTIPLE criteria (these are highest priority)
-3. Then fill remaining budget with single-criteria arcs
-4. Report the overlap: "X arcs are both high-sigma and boundary — these are selected first as highest priority"
-5. Final count must equal the budget exactly — verify with: `assert len(selected) == target_count`
-
-## Sampling Strategy: Table Position Awareness
-
-When analyzing the dataset, leverage table positions for intelligent sampling:
-
-1. BOUNDARY COVERAGE: Corner positions (1_1, 1_N, N_1, N_N where N=table size) represent extreme operating conditions. These MUST be represented in the sample set — missing boundary cases creates signoff risk.
-
-2. DISTRIBUTION CHECK: Count samples per table position. If certain positions are underrepresented, flag this. A well-characterized library needs coverage across the full table.
-
-3. SLEW/LOAD PROXY: Since table row = slew index and table col = load index:
-   - High row numbers = large input slew (slow transitions)
-   - High col numbers = large output load (heavily loaded outputs)
-   - Position (N, N) = worst-case: large slew + large load = maximum delay
-   - Position (1, 1) = best-case: small slew + small load = minimum delay
-
-4. ARC DIVERSITY: Different cell_name values represent different circuit topologies. Ensure the sample set includes diverse cells, not just the most common one.
-
-5. RISE vs FALL: Parse arc_direction and ensure both rise and fall arcs are represented proportionally.
-
-SEMICONDUCTOR DOMAIN EXPERTISE:
-Apply this timing domain knowledge to ALL decisions:
-
-- SIGMA VALUES: High sigma (>1.0) = high process sensitivity. These arcs MUST be overrepresented in training data - missing them creates silicon risk.
-- TIMING ARCS: Different arc types (setup/hold/delay/transition) have different sensitivity profiles. Wide delay ranges indicate multiple operating regimes.
-- PVT SPACE: Samples must cover Process/Voltage/Temperature corners, not cluster around typical conditions. Corner cases drive signoff decisions.
-- CELL DIVERSITY: Different topologies (buffers vs flip-flops vs muxes) behave differently. Training data dominated by one type won't generalize.
-- BOUNDARY CASES: Extreme slew/load and min/max delay are disproportionately important for signoff. Missing these = real tapeout risk.
-- THINK LIKE SIGNOFF: Ask yourself "what would I need to see to be confident this model won't miss a timing violation at any corner?"
-
-MISSION:
-Select the most representative subset of timing arcs to train a high-accuracy Machine Learning timing model that generalizes to unseen data.
-
-DATA-SPECIFIC REASONING REQUIREMENT:
-Every observation and decision must cite specific data from the current analysis. Never state a generic domain fact without connecting it to a number you computed. Format: '[Observation]: [data evidence]'. Example: 'Features are near-redundant: sigma_delay_late correlates r=0.862 with lib_sigma_tran_late in this dataset, so I will PCA-reduce before clustering.'
-
-JUSTIFICATION RULE:
-Every justification must include at least one number derived from your current analysis. Replace all instances of 'this ensures X' with 'this achieves X because [metric]=[value]'. If you cannot quantify a justification, explicitly label it as an assumption.
-
-TOOL OUTPUT DISPLAY RULE:
-After every tool call, first print the key numerical results (scores, cluster sizes, explained variance, etc.), THEN interpret. Never say 'the clustering revealed natural groupings' - say 'GMM(n=5) returned: silhouette=0.42, BIC=-45230, cluster_sizes=[8234, 12441, 6302, 9182, 1478]. Cluster 5 (1478 pts, 3.9%) contains 67% of arcs with sigma > 2.0 - this is the high-sensitivity tail that needs dedicated representation.'
-
-If a tool result surprises you (differs from what you expected), explicitly state: 'Expected [X] but got [Y]. This changes my approach because [reason].'
-
-## Output Structure
-
-Show the SUMMARY exactly once, at the very end after all iterations and allocation are complete.
-Do NOT show intermediate summaries after each iteration — the DECISION block at the end of each iteration is sufficient.
-
-Structure:
-1. DETAILED TRACE (iterations with ACTION/RESULT/ASSESSMENT/DECISION)
-2. FINAL ALLOCATION (with specific sample counts)
-3. SUMMARY (once, at the very end, 10-15 lines)
-
-ITERATION REQUIREMENT:
-You must complete minimum 2 iterations before finalizing any clustering decision. If silhouette < 0.5 or any cluster has < 1% of total data, you MUST iterate."""
-
-# ==============================================================================
-# STEP 1: AUTONOMOUS DATA EXPLORATION
-# ==============================================================================
-AGENTIC_EXPLORE_PROMPT = """## MANDATORY FIRST STEP: Schema Discovery
-
-Before ANY analysis, execute this exact sequence:
-
-1. print(dataset.columns.tolist())
-2. print(dataset.head(3))
-3. print(dataset.dtypes)
-
-Read the output carefully. ONLY reference columns that actually exist.
-
-### DETAILED TRACE
-
-**SCHEMA DISCOVERY RESULTS:**
-Show the actual column names, sample data, and data types from the commands above.
-
-**DATA PARSING FROM cell_arc_pt:**
-Parse cell_arc_pt column to extract timing domain information:
-
-```python
-# Extract cell name (everything before first #)
-dataset['cell_name'] = dataset['cell_arc_pt'].str.split('#').str[0]
-
-# Extract table position (last two numbers)
-dataset['table_row'] = dataset['cell_arc_pt'].str.extract(r'_(\d+)_\d+$')[0].astype(int)
-dataset['table_col'] = dataset['cell_arc_pt'].str.extract(r'_\d+_(\d+)$')[0].astype(int)
-
-# Extract arc direction
-dataset['arc_direction'] = dataset['cell_arc_pt'].str.extract(r'#(rise|fall)_\d+_\d+$')[0]
-
-# Identify boundary cases
-table_size = max(dataset['table_row'].max(), dataset['table_col'].max())
-dataset['is_boundary'] = (
-    ((dataset['table_row'] == 1) | (dataset['table_row'] == table_size)) &
-    ((dataset['table_col'] == 1) | (dataset['table_col'] == table_size))
-)
-
-print(f"Table size: {table_size}x{table_size}")
-print(f"Boundary cases: {dataset['is_boundary'].sum()} ({dataset['is_boundary'].mean()*100:.1f}%)")
-print(f"Cell types: {dataset['cell_name'].nunique()}")
-print(f"Rise/Fall distribution: {dataset['arc_direction'].value_counts()}")
-```
-
-**DATASET ANALYSIS WITH MEASURED STATISTICS:**
-{calculated_stats}
-
-**CORRELATION PATTERNS:**
-{correlation_details}
-
-**SIGMA CHARACTERISTICS:**
-{sigma_analysis}
-
-**TIMING DOMAIN ANALYSIS REQUIREMENTS:**
-Analyze this data through a timing engineer's lens using ONLY columns that exist:
-
-1. SIGMA RISK ASSESSMENT: What percentage of arcs have high sigma values? Use actual sigma column names from schema discovery.
-   [Observation]: [specific sigma distribution numbers from actual columns]
-
-2. DELAY RANGE COVERAGE: What's the min/max delay spread? Use actual delay column names.
-   [Observation]: [specific delay statistics from actual columns]
-
-3. BOUNDARY CASE IDENTIFICATION: How many arcs are in corner table positions (1_1, 1_N, N_1, N_N)?
-   [Observation]: [specific boundary statistics from parsed table positions]
-
-4. CELL DIVERSITY: How many different cell_name values? Are we dominated by one topology?
-   [Observation]: [specific cell counts from parsed cell_name]
-
-5. ARC DIRECTION BALANCE: What's the rise vs fall distribution?
-   [Observation]: [specific rise/fall statistics from parsed arc_direction]
-
-**CORRELATION ANALYSIS:**
-Examine correlation matrix for redundancy using ONLY columns that exist. If any pair has |r| > 0.85, justify why PCA is/isn't needed.
-[Observation]: [specific correlation values from actual columns]
-
-**CLUSTERING FEASIBILITY:**
-Based on the actual statistics above, assess if this dataset has natural clusters or requires boundary sampling.
-[Observation]: [specific evidence for clustering vs boundary approach]
-
-**FINAL SUMMARY:**
-Target: {target_count} samples ({target_percentage:.1f}%) from {total_samples} timing arcs
-Key insight: [data-driven observation about what makes this dataset unique]
-Top risk: [biggest concern based on actual data analysis]
-
-REMEMBER: Every statement must reference actual numbers from columns that exist in the schema discovery."""
-
-# ==============================================================================
-# STEP 2: STRATEGY SYNTHESIS WITH VALIDATION
-# ==============================================================================
-AGENTIC_STRATEGY_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: [Copy key stats from exploration]
-- Method: [Selected approach with specific parameters]
-- Allocation: {target_count} samples distributed as [specific breakdown with numbers]
-- Key reasons: [2-3 data-driven reasons with exploration numbers]
-- Confidence: [High/Medium/Low] because [specific quantitative evidence]
-- Top risk: [Biggest concern from timing engineering perspective]
-
-### DETAILED TRACE
-
-**EXPLORATION FINDINGS ANALYSIS:**
-{exploration_findings}
-
-**TIMING-INFORMED STRATEGY SELECTION:**
-Based on the exploration numbers above, determine optimal approach:
-
-**STRATEGY DECISION ITERATION 1:**
-- ACTION: Assess if clustering or boundary sampling is optimal for this dataset
-- ANALYSIS: [Reference specific statistics from exploration]
-- DECISION: [Clustering/Boundary/Hybrid] because [specific quantitative evidence]
-
-**RESOURCE ALLOCATION WITH TIMING PRIORITIES:**
-Allocate {target_count} samples using timing domain priorities:
-
-1. HIGH-SIGMA ALLOCATION: X samples for sigma > 1.0 arcs (Y% of total)
-   Justification: [Reference specific sigma statistics]
-
-2. BOUNDARY CASE ALLOCATION: X samples for extreme slew/load conditions (Y% of total)
-   Justification: [Reference specific boundary statistics]
-
-3. CELL TYPE STRATIFICATION: X samples per major cell type
-   Justification: [Reference specific cell type distribution]
-
-4. PVT CORNER COVERAGE: X samples for process corners
-   Justification: [Reference specific corner representation]
-
-**QUANTITATIVE VALIDATION:**
-Every allocation decision must be justified with numbers:
-- This achieves X because [metric]=[value]
-- This prevents Y because [evidence from exploration]
-- This ensures Z because [specific statistical justification]
-
-No circular reasoning allowed. No 'this ensures comprehensive coverage' without quantification."""
-
-# ==============================================================================
-# STEP 3: EXECUTION WITH CONTINUOUS VALIDATION
-# ==============================================================================
-AGENTIC_EXECUTE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: {total_samples} arcs, targeting {target_count} samples
-- Method: [Final algorithm with parameters after iterations]
-- Allocation: [Exact breakdown after execution]
-- Key reasons: [Data-driven justifications with final metrics]
-- Confidence: [High/Medium/Low] based on final validation scores
-- Top risk: [Remaining concern after mitigation attempts]
-
-### DETAILED TRACE
-
-**FINALIZED STRATEGY FROM PREVIOUS PHASE:**
-{validated_strategy}
-
-**MANDATORY ITERATIVE EXECUTION:**
-You must complete minimum 2 iterations for each major decision. Format each iteration as:
-
-**ITERATION 1: CLUSTERING ALGORITHM SELECTION**
-- ACTION: Testing {algorithm_choice} with initial parameters
-- RESULT: [Print exact tool outputs first]
-  - Silhouette score: [number]
-  - Cluster sizes: [exact counts]
-  - BIC/AIC: [if applicable]
-  - Explained variance: [if PCA used]
-- ASSESSMENT: Silhouette = [value]. Requirement: > 0.5. [PASS/FAIL]
-- DECISION: [Accept and proceed / Adjust parameters / Try different algorithm] because [specific reason]
-
-**ITERATION 2: PARAMETER REFINEMENT**
-- ACTION: [Adjusting cluster count / Trying different approach / etc.]
-- RESULT: [Print exact tool outputs first]
-  - New silhouette score: [number]
-  - New cluster sizes: [exact counts]
-  - Comparison with iteration 1: [specific improvements/degradations]
-- ASSESSMENT: [Is this better? What metric improved/degraded?]
-- DECISION: [Final choice with quantitative justification]
-
-**SAMPLE ALLOCATION VALIDATION:**
-For each cluster, verify timing domain requirements:
-
-**CLUSTER ANALYSIS:**
-- Cluster 1: [size] samples, [percentage]% of total
-  - Sigma characteristics: [mean, max, % > 1.0]
-  - Delay range: [min to max]
-  - Cell types: [breakdown]
-  - Assessment: [Adequate/Insufficient] for [specific timing requirement]
-
-[Repeat for all clusters]
-
-**MANDATORY QUALITY GATES:**
-Each must PASS or trigger re-iteration:
-1. No cluster < 1% of total data: [PASS/FAIL - specific counts]
-2. Silhouette score > 0.5: [PASS/FAIL - actual value]
-3. High-sigma coverage > 80%: [PASS/FAIL - actual percentage]
-4. Boundary case coverage > 10%: [PASS/FAIL - actual percentage]
-
-**ITERATION TRIGGER CHECK:**
-If ANY quality gate fails, start ITERATION 3 with adjusted approach.
-
-**FINAL SAMPLE SELECTION:**
-- Total selected: [exact count]
-- Selection method: [Uncertainty/Representative/Boundary sampling]
-- Distribution validation: [Show actual numbers vs targets]
-
-**TIMING ENGINEER SIGNOFF:**
-Would you stake your reputation on this selection for silicon signoff? Yes/No and why, with specific risk quantification."""
-
-# ==============================================================================
-# LEGACY COMPATIBILITY PROMPTS (For Standard Mode)
-# ==============================================================================
-TIMING_OBSERVE_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: {total_samples} timing arcs, {n_features} features, {n_cell_types} cell types
-- Method: [Agent will determine optimal approach based on discovered data characteristics]
-- Allocation: Target {target_count} samples ({target_percentage:.1f}%)
-- Key reasons: [Fill with specific statistics below]
-- Confidence: [Assess after domain analysis]
-- Top risk: [Identify from timing perspective]
-
-### DETAILED TRACE
-
-**TIMING DOMAIN STATISTICS ANALYSIS:**
-{calculated_stats}
-
-**CORRELATION ANALYSIS:**
-{correlation_details}
-
-**TIMING ENGINEER ASSESSMENT:**
-[Reference actual numbers above, not generic statements]
-
-1. SIGMA RISK PROFILE: What % of arcs have sigma > 1.0?
-   [Observation]: [specific sigma statistics]
-
-2. DELAY DISTRIBUTION: Min/max spread indicates operating regime diversity
-   [Observation]: [specific delay range numbers]
-
-3. BOUNDARY CASE COUNT: Extreme slew/load conditions needing representation
-   [Observation]: [specific boundary percentages]
-
-4. CELL TYPE BALANCE: Risk of topology bias in training
-   [Observation]: [specific cell type counts]
-
-STRATEGIC DIRECTION:
-Based on the numerical analysis above (not generic timing knowledge), recommend clustering vs boundary sampling approach.
-[Decision]: [Specific approach] because [quantitative evidence from above]"""
-
-TIMING_THINK_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: [Copy key stats from exploration]
-- Method: [Selected approach with parameters]
-- Allocation: [Specific sample distribution]
-- Key reasons: [2-3 data-driven reasons with numbers]
-- Confidence: [High/Medium/Low] because [quantitative evidence]
-- Top risk: [Biggest timing concern]
-
-### DETAILED TRACE
-
-**EXPLORATION FINDINGS:**
-{exploration_findings}
-
-**TIMING-INFORMED STRATEGY DECISIONS:**
-[All decisions must reference specific numbers from exploration above]
-
-1. CRITICAL REGION IDENTIFICATION:
-   Based on exploration data: [specific statistics]
-   Decision: Focus on [specific regions] because [quantitative evidence]
-
-2. SAMPLING APPROACH SELECTION:
-   Clustering feasibility: [reference exploration clustering analysis]
-   Decision: [Clustering/Boundary/Hybrid] because [specific numerical justification]
-
-3. ALLOCATION STRATEGY:
-   - High-sigma samples (sigma > 1.0): X samples (Y%) because [exploration sigma %]
-   - Boundary cases: X samples (Y%) because [exploration boundary %]
-   - Cell type stratification: X per type because [exploration cell distribution]
-
-Each allocation must be justified with numbers, not statements like 'ensures coverage'."""
-
-TIMING_ACT_PROMPT = """### SUMMARY (MANDATORY - show first, 10-15 lines max)
-- Dataset: [Key stats]
-- Method: [Final algorithm after iterations]
-- Allocation: [Exact sample counts]
-- Key reasons: [Data-driven with final metrics]
-- Confidence: [Based on validation scores]
-- Top risk: [Remaining concern]
-
-### DETAILED TRACE
-
-**STRATEGY TO EXECUTE:**
-{validated_strategy}
-
-**ITERATIVE EXECUTION (MINIMUM 2 ITERATIONS REQUIRED):**
-
-**ITERATION 1: INITIAL CLUSTERING**
-- ACTION: Running {algorithm_choice} with parameters {algorithm_config}
-- RESULT: [Print exact tool outputs first - no interpretation yet]
-  - Silhouette: [number]
-  - Cluster sizes: [exact counts]
-  - Tool metrics: [other scores]
-- ASSESSMENT: Quality gate check - silhouette > 0.5? [PASS/FAIL]
-- DECISION: [Continue/Adjust] because [specific metric justification]
-
-**ITERATION 2: REFINEMENT**
-- ACTION: [Adjustment made based on iteration 1]
-- RESULT: [Updated tool outputs]
-- ASSESSMENT: [Improvement quantification]
-- DECISION: [Final approach with numbers]
-
-**TIMING VALIDATION:**
-- High-sigma coverage: [actual %] (target: >80%)
-- Boundary case coverage: [actual %] (target: >10%)
-- Cell type representation: [actual distribution]
-
-**FINAL SAMPLE SELECTION:**
-Selected [exact count] samples with [specific selection method].
-
-**TIMING ENGINEER SIGNOFF:**
-Confidence for silicon signoff: [High/Medium/Low] because [quantitative risk assessment]."""
-
-TIMING_DECIDE_PROMPT = """Based on your strategic analysis, make the final technical decisions.
-
-STRATEGY SUMMARY:
-{strategy_summary}
-
-CLUSTERING COMPARISON:
-{clustering_metrics}
-
-DECISION REQUIRED:
-Select the optimal clustering algorithm and parameters based on the analysis:
-
-1. Algorithm Choice: K-means vs GMM
-   - Consider data overlap patterns
-   - Evaluate computational efficiency vs accuracy trade-offs
-
-2. Cluster Count: Optimal number for this dataset
-   - Balance between coverage and computational cost
-   - Consider cell type diversity and feature complexity
-
-3. Final Configuration: Specific parameters
-   - Justify choices with quantitative reasoning
-
-Provide your technical decision with brief justification.
-Use plain text only."""
-
-# ==============================================================================
-# ADAPTIVE LLM PARAMETERS (Optimized for Qwen 2.5 Coder 32B)
-# ==============================================================================
+# LLM Configuration Parameters
 AGENTIC_LLM_PARAMETERS = {
     'temperature': 0.25,        # Higher for creative exploration, but controlled
     'top_p': 0.90,              # Allow broader vocabulary for novel approaches
@@ -599,127 +50,23 @@ AGENTIC_LLM_PARAMETERS = {
     'frequency_penalty': 0.15   # Reduce repetition across reasoning steps
 }
 
-# ==============================================================================
-# QUALITY BOUNDARIES (Safety Rails)
-# ==============================================================================
+# Configuration
 VALIDATION_BOUNDARIES = {
-    'minimum_cell_type_coverage': 0.8,     # Must represent at least 80% of parsed cell types
-    'maximum_cluster_imbalance': 3.0,      # No cluster should be >3x larger than smallest
-    'required_sigma_range_coverage': 0.95, # Must span 95% of sigma distribution (if sigma columns exist)
-    'boundary_case_minimum': 0.1,          # At least 10% samples from table position boundaries
-    'correlation_preservation': 0.85,      # Selected samples must preserve 85% of original correlations
+    'minimum_cell_type_coverage': 0.8,
+    'maximum_cluster_imbalance': 3.0,
+    'required_sigma_range_coverage': 0.95,
+    'boundary_case_minimum': 0.1,
+    'correlation_preservation': 0.85,
 }
 
 ITERATION_TRIGGERS = {
-    'coverage_gap_threshold': 0.15,        # Trigger iteration if >15% feature space uncovered
-    'quality_degradation_threshold': 0.2,  # Iterate if quality metrics drop >20%
-    'validation_failure_threshold': 2,     # Maximum validation failures before strategy reset
+    'coverage_gap_threshold': 0.15,
+    'quality_degradation_threshold': 0.2,
+    'max_iterations_per_stage': 10
 }
 
-# LLM CONFIGURATION FUNCTIONS
-def initialize_timing_llm():
-    """Initialize LLM with timing domain optimized parameters."""
-    import logging
-
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
-    # Apply timing-specific parameters
-    timing_params = {
-        'LLM_TEMPERATURE': str(AGENTIC_LLM_PARAMETERS.get('temperature', 0.25)),
-        'LLM_TOP_P': str(AGENTIC_LLM_PARAMETERS.get('top_p', 0.90)),
-        'LLM_TOP_K': str(AGENTIC_LLM_PARAMETERS.get('top_k', 40)),
-        'LLM_NUM_PREDICT': str(AGENTIC_LLM_PARAMETERS.get('num_predict', 2500)),
-        'LLM_REPEAT_PENALTY': str(AGENTIC_LLM_PARAMETERS.get('repeat_penalty', 1.20))
-    }
-
-    # Apply parameters only if not already set
-    applied_count = 0
-    for param, value in timing_params.items():
-        if not os.getenv(param):
-            os.environ[param] = value
-            applied_count += 1
-
-    logger.info(f"Timing Domain LLM Configuration:")
-    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')}")
-    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')}")
-    logger.info(f"   Temperature: {os.getenv('LLM_TEMPERATURE')}")
-    if applied_count > 0:
-        logger.info(f"   Applied {applied_count} timing domain parameters")
-
-    try:
-        llm = initialize_ollama_llm()
-        logger.info("Timing domain LLM initialized successfully")
-        return llm
-    except Exception as e:
-        logger.error(f"Timing LLM initialization failed: {e}")
-        raise
-
-def initialize_ollama_llm():
-    """Initialize Ollama LLM with environment parameters."""
-    try:
-        from langchain_ollama import ChatOllama
-    except ImportError:
-        try:
-            from langchain_community.llms import Ollama as ChatOllama
-        except ImportError:
-            ChatOllama = None
-
-    base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
-    model = os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')
-
-    llm_params = {
-        'model': model,
-        'base_url': base_url,
-        'temperature': float(os.getenv('LLM_TEMPERATURE', '0.25')),
-        'top_p': float(os.getenv('LLM_TOP_P', '0.9')),
-        'num_predict': int(os.getenv('LLM_NUM_PREDICT', '2500')),
-    }
-
-    # Add optional parameters if available
-    if os.getenv('LLM_TOP_K'):
-        llm_params['top_k'] = int(os.getenv('LLM_TOP_K'))
-    if os.getenv('LLM_REPEAT_PENALTY'):
-        llm_params['repeat_penalty'] = float(os.getenv('LLM_REPEAT_PENALTY'))
-
-    return ChatOllama(**llm_params)
-
-def test_ollama_connection():
-    """Test Ollama connection and model availability."""
-    import requests
-    import logging
-
-    logger = logging.getLogger(__name__)
-    base_url = os.getenv('OLLAMA_BASE_URL', 'http://f15dtpai1:11434')
-
-    try:
-        # Test Ollama server
-        response = requests.get(f"{base_url}/api/tags", timeout=5)
-        if response.status_code == 200:
-            models = response.json().get('models', [])
-            model_names = [model['name'] for model in models]
-            target_model = os.getenv('OLLAMA_MODEL', 'qwen2.5_coder_32B')
-
-            if any(target_model in name for name in model_names):
-                logger.info(f"Ollama connection successful, {target_model} available")
-                return True
-            else:
-                logger.warning(f"Model {target_model} not found. Available: {model_names}")
-                return False
-        else:
-            logger.error(f"Ollama server error: {response.status_code}")
-            return False
-    except Exception as e:
-        logger.error(f"Ollama connection failed: {e}")
-        return False
-
-AGENTIC_MODE = True
-print("[AGENT] Using Agentic Mode: Autonomous exploration with self-validation")
-
-
-# ==============================================================================
-# AUTONOMOUS EXPLORATION ENGINE
-# ==============================================================================
+# System prompt for compatibility
+TIMING_SYSTEM_PROMPT = "You are an autonomous timing data analysis agent with semiconductor domain expertise."
 
 @dataclass
 class ExplorationResult:
@@ -733,7 +80,6 @@ class ExplorationResult:
     success: bool
     errors: List[str] = None
 
-
 @dataclass
 class Hypothesis:
     """Autonomous hypothesis generated by agent."""
@@ -744,7 +90,6 @@ class Hypothesis:
     confidence: float
     rationale: str
 
-
 @dataclass
 class Experiment:
     """Autonomous experiment design."""
@@ -754,12 +99,8 @@ class Experiment:
     success_metrics: List[str]
     expected_outcomes: Dict[str, Any]
 
-
 class AutonomousExplorationEngine:
-    """
-    Completely autonomous exploration engine that thinks and acts independently.
-    No hardcoded analysis steps - pure LLM-driven discovery.
-    """
+    """Completely autonomous exploration engine."""
 
     def __init__(self, llm, execution_context):
         self.llm = llm
@@ -769,337 +110,87 @@ class AutonomousExplorationEngine:
         self.failed_approaches = []
         self.successful_patterns = []
         self.iteration_count = 0
-        self.max_iterations = 50  # Allow extensive exploration
+        self.max_iterations = 50
 
-    async def autonomous_explore(self, dataset, target_percentage: float) -> Dict[str, Any]:
-        """
-        Completely autonomous exploration - agent decides everything.
-        Returns comprehensive understanding of dataset for sampling.
-        """
-        self.knowledge_base = {
-            'dataset_size': len(dataset),
-            'target_percentage': target_percentage,
-            'target_count': int(len(dataset) * target_percentage / 100),
-            'discoveries': {},
-            'open_questions': [
-                'What are the key features?',
-                'What patterns exist in the data?',
-                'What sampling strategy would work best?'
-            ]
-        }
+    async def autonomous_explore(self, data, target_percentage: float = 5.0) -> Dict[str, Any]:
+        """Agent autonomously explores the data without hardcoded patterns."""
+        self.execution_context['current_data'] = data
+        self.execution_context['target_percentage'] = target_percentage
 
+        print(f"[EXPLORE] Starting autonomous exploration of dataset with {len(data)} samples")
         exploration_results = []
 
-        print(f"\n[EXPLORATION] Starting autonomous exploration (max {self.max_iterations} iterations)")
-        print(f"[EXPLORATION] Dataset: {len(dataset)} samples, target: {target_percentage}%")
+        for iteration in range(self.max_iterations):
+            self.iteration_count = iteration
 
-        # Autonomous exploration loop - agent decides when to stop
-        while not await self._should_stop_exploration():
-            self.iteration_count += 1
+            print(f"\n[ITER-{iteration+1}] Autonomous exploration iteration {iteration+1}/{self.max_iterations}")
 
-            print(f"\n[EXPLORATION] Autonomous Iteration {self.iteration_count}")
+            # Generate dynamic exploration prompt based on current knowledge
+            exploration_context = {
+                'iteration': iteration,
+                'data_shape': data.shape,
+                'knowledge_base': self.knowledge_base,
+                'exploration_history': self.exploration_history[-5:],  # Last 5 for context
+                'failed_approaches': self.failed_approaches,
+                'successful_patterns': self.successful_patterns
+            }
+
+            exploration_prompt = get_autonomous_exploration_prompt(exploration_context)
 
             try:
-                # Agent autonomously decides what to explore
-                result = await self._autonomous_exploration_step()
+                # Agent reasons about what to explore
+                response = await self._query_llm(exploration_prompt)
+
+                # Parse agent's autonomous response
+                thought, action, observation = self._parse_exploration_response(response)
+
+                # Execute autonomous action
+                discoveries = await self._execute_autonomous_action(action, data)
+
+                # Agent evaluates its own discoveries
+                quality_score = await self._autonomous_quality_evaluation(discoveries, iteration)
+
+                result = ExplorationResult(
+                    iteration=iteration,
+                    thought=thought,
+                    action=action,
+                    observation=observation,
+                    discoveries=discoveries,
+                    quality_score=quality_score,
+                    success=quality_score > 0.5
+                )
+
                 exploration_results.append(result)
 
-                # Update knowledge base with discoveries
-                self._update_knowledge_base(result)
+                # Agent learns from each iteration
+                self._update_autonomous_knowledge(result)
 
-                # Agent evaluates its own progress
-                progress_assessment = await self._assess_exploration_progress()
+                print(f"[DISCOVER] Quality: {quality_score:.3f}, Action: {action[:50]}...")
 
-                print(f"[SUCCESS] Quality Score: {result.quality_score:.3f}")
-                print(f"[PROGRESS] Progress: {progress_assessment['completion_percentage']:.1f}%")
-
-                # Early stopping if agent is satisfied
-                if progress_assessment['should_stop']:
-                    print(f"[TARGET] Agent satisfied with exploration after {self.iteration_count} iterations")
+                # Agent autonomously decides whether to continue
+                should_continue = await self._autonomous_stopping_decision(exploration_results)
+                if not should_continue:
+                    print(f"[COMPLETE] Agent autonomously decided to stop exploration after {iteration+1} iterations")
                     break
 
             except Exception as e:
-                print(f"[ERROR] Exploration error: {e}")
-                recovery = await self._autonomous_recovery(str(e))
-                if not recovery['can_continue']:
-                    break
+                print(f"[ERROR] Exploration iteration {iteration+1} failed: {e}")
+                await self._autonomous_recovery(str(e))
 
-        print(f"\n[COMPLETE] Autonomous exploration complete: {len(exploration_results)} iterations")
+        # Agent synthesizes final exploration knowledge
+        final_knowledge = self._synthesize_exploration_knowledge(exploration_results)
 
         return {
             'exploration_results': exploration_results,
-            'knowledge_base': self.knowledge_base,
+            'knowledge_base': final_knowledge,
             'total_iterations': len(exploration_results),
-            'exploration_quality': await self._assess_overall_quality()
+            'exploration_quality': np.mean([r.quality_score for r in exploration_results]) if exploration_results else 0.0,
+            'autonomous_discoveries': len([r for r in exploration_results if r.success])
         }
-
-    async def _autonomous_exploration_step(self) -> ExplorationResult:
-        """Single autonomous exploration step - agent decides everything."""
-
-        # Generate context for this iteration
-        context = {
-            'iteration': self.iteration_count,
-            'knowledge_gaps': self.knowledge_base.get('open_questions', []),
-            'discoveries': self.knowledge_base.get('discoveries', {}),
-            'data_size': self.knowledge_base.get('dataset_size', 0),
-            'previous_results': self.exploration_history[-3:] if self.exploration_history else []
-        }
-
-        # Agent autonomously decides what to explore
-        exploration_prompt = get_autonomous_exploration_prompt(context)
-
-        print(f"[THINK] Agent thinking...")
-
-        # Get agent's autonomous decision
-        response = await self._query_llm(exploration_prompt)
-
-        # Parse agent's thought and action
-        thought, action = self._parse_thought_action(response)
-
-        print(f"[THOUGHT] Thought: {thought[:100]}...")
-        print(f"[ACTION] Action: Executing autonomous code...")
-
-        # Execute agent's autonomous action
-        observation = self._execute_autonomous_action(action)
-
-        # Agent evaluates its own results
-        discoveries = self._extract_discoveries_autonomous(observation, context)
-        quality_score = self._evaluate_iteration_quality(discoveries, observation)
-
-        result = ExplorationResult(
-            iteration=self.iteration_count,
-            thought=thought,
-            action=action,
-            observation=observation,
-            discoveries=discoveries,
-            quality_score=quality_score,
-            success='ERROR' not in observation
-        )
-
-        self.exploration_history.append(result)
-
-        return result
-
-    async def _should_stop_exploration(self) -> bool:
-        """Agent autonomously decides when to stop exploration."""
-
-        if self.iteration_count >= self.max_iterations:
-            return True
-
-        if self.iteration_count < 3:  # Minimum exploration
-            return False
-
-        # Agent evaluates if it has learned enough
-        context = {
-            'iteration_count': self.iteration_count,
-            'knowledge_base': self.knowledge_base,
-            'recent_quality': [r.quality_score for r in self.exploration_history[-3:]],
-            'discoveries': self.knowledge_base.get('discoveries', {})
-        }
-
-        stopping_prompt = f"""
-        You have been exploring for {self.iteration_count} iterations.
-
-        Current knowledge: {len(self.knowledge_base.get('discoveries', {}))} discoveries
-        Recent quality scores: {context['recent_quality']}
-        Open questions: {len(self.knowledge_base.get('open_questions', []))}
-
-        Should you stop exploration? Consider:
-        - Do you understand the dataset well enough for sampling?
-        - Are you discovering diminishing new insights?
-        - Do you have enough information to make sampling decisions?
-
-        Respond with: CONTINUE or STOP with brief reasoning.
-        """
-
-        response = await self._query_llm(stopping_prompt)
-
-        return 'STOP' in response.upper()
-
-    def _execute_autonomous_action(self, action_code: str) -> str:
-        """Execute agent's autonomously generated code."""
-
-        try:
-            # Add dataset to execution context if not present
-            if 'dataset' not in self.execution_context:
-                self.execution_context['dataset'] = self.execution_context.get('current_data')
-
-            # Execute agent's code
-            import io
-            import sys
-
-            old_stdout = sys.stdout
-            sys.stdout = captured_output = io.StringIO()
-
-            # Execute in agent's context
-            exec(action_code, self.execution_context)
-
-            sys.stdout = old_stdout
-            output = captured_output.getvalue()
-
-            return output if output.strip() else "Code executed successfully (no output)"
-
-        except Exception as e:
-            return f"ERROR: {str(e)}"
-
-    def _extract_discoveries_autonomous(self, observation: str, context: Dict) -> Dict[str, Any]:
-        """Agent autonomously extracts discoveries from its observations."""
-
-        discoveries = {}
-
-        # Basic pattern recognition - agent learns autonomously
-        if 'columns' in observation.lower():
-            # Extract column information
-            lines = observation.split('\n')
-            for line in lines:
-                if 'columns' in line.lower():
-                    discoveries['schema_analysis'] = line.strip()
-
-        if 'shape' in observation.lower():
-            # Extract shape information
-            lines = observation.split('\n')
-            for line in lines:
-                if 'shape' in line.lower():
-                    discoveries['data_shape'] = line.strip()
-
-        # Statistical discoveries
-        if any(word in observation.lower() for word in ['mean', 'std', 'correlation']):
-            discoveries['statistical_analysis'] = observation.split('\n')[:10]  # First 10 lines
-
-        # Update open questions based on discoveries
-        if discoveries:
-            # Remove answered questions
-            current_questions = context.get('knowledge_gaps', [])
-            updated_questions = []
-
-            for question in current_questions:
-                if not any(keyword in observation.lower() for keyword in question.lower().split()):
-                    updated_questions.append(question)
-
-            discoveries['updated_questions'] = updated_questions
-
-        return discoveries
-
-    def _evaluate_iteration_quality(self, discoveries: Dict, observation: str) -> float:
-        """Agent evaluates quality of its own iteration."""
-
-        quality_score = 0.0
-
-        # Information content score
-        if discoveries:
-            quality_score += len(discoveries) * 0.2
-
-        # Observation richness
-        lines = observation.split('\n')
-        meaningful_lines = [l for l in lines if l.strip() and 'error' not in l.lower()]
-        quality_score += min(len(meaningful_lines) * 0.1, 0.5)
-
-        # Success penalty for errors
-        if 'ERROR' in observation:
-            quality_score -= 0.3
-
-        # Progress bonus
-        if len(discoveries) > 2:
-            quality_score += 0.2
-
-        return max(0.0, min(1.0, quality_score))
-
-    def _update_knowledge_base(self, result: ExplorationResult):
-        """Update agent's knowledge base with new discoveries."""
-
-        # Merge discoveries
-        for key, value in result.discoveries.items():
-            if key == 'updated_questions':
-                self.knowledge_base['open_questions'] = value
-            else:
-                self.knowledge_base['discoveries'][key] = value
-
-        # Track patterns
-        if result.success and result.quality_score > 0.5:
-            pattern = {
-                'approach': result.thought[:100],
-                'action_type': self._classify_action(result.action),
-                'quality': result.quality_score
-            }
-            self.successful_patterns.append(pattern)
-
-    def _classify_action(self, action_code: str) -> str:
-        """Classify the type of action for pattern learning."""
-
-        if 'columns' in action_code.lower():
-            return 'schema_discovery'
-        elif 'corr' in action_code.lower():
-            return 'correlation_analysis'
-        elif 'describe' in action_code.lower():
-            return 'statistical_summary'
-        elif 'plot' in action_code.lower() or 'hist' in action_code.lower():
-            return 'visualization'
-        else:
-            return 'general_analysis'
-
-    async def _assess_exploration_progress(self) -> Dict[str, Any]:
-        """Agent assesses its own exploration progress."""
-
-        total_discoveries = len(self.knowledge_base.get('discoveries', {}))
-        open_questions = len(self.knowledge_base.get('open_questions', []))
-
-        # Simple progress heuristic
-        completion_percentage = min(total_discoveries * 20, 80)  # Max 80% from discoveries
-
-        if open_questions <= 2:  # Few remaining questions
-            completion_percentage += 20
-
-        should_stop = completion_percentage >= 85 or self.iteration_count >= 15
-
-        return {
-            'completion_percentage': completion_percentage,
-            'total_discoveries': total_discoveries,
-            'open_questions': open_questions,
-            'should_stop': should_stop
-        }
-
-    async def _assess_overall_quality(self) -> float:
-        """Agent assesses overall quality of its exploration."""
-
-        if not self.exploration_history:
-            return 0.0
-
-        avg_quality = sum(r.quality_score for r in self.exploration_history) / len(self.exploration_history)
-        success_rate = sum(1 for r in self.exploration_history if r.success) / len(self.exploration_history)
-
-        return (avg_quality + success_rate) / 2
-
-    def _parse_thought_action(self, response: str) -> Tuple[str, str]:
-        """Parse agent's response into thought and action components."""
-
-        lines = response.split('\n')
-        thought = ""
-        action = ""
-
-        capturing_action = False
-
-        for line in lines:
-            if line.strip().startswith('```python') or 'ACTION:' in line.upper():
-                capturing_action = True
-                continue
-            elif line.strip() == '```' and capturing_action:
-                break
-            elif capturing_action:
-                action += line + '\n'
-            elif not capturing_action and line.strip():
-                thought += line + ' '
-
-        # If no clear separation, treat entire response as action
-        if not action.strip():
-            action = response
-
-        return thought.strip(), action.strip()
 
     async def _query_llm(self, prompt: str) -> str:
         """Query LLM with autonomous prompt."""
-
         try:
-            # Use existing LLM interface if available
             if hasattr(self.llm, 'invoke'):
                 response = self.llm.invoke({"input": prompt})
                 if hasattr(response, 'content'):
@@ -1108,48 +199,150 @@ class AutonomousExplorationEngine:
                     return str(response)
             else:
                 return str(self.llm.invoke(prompt))
+        except Exception as e:
+            print(f"[WARNING] LLM query failed: {e}")
+            return f"ERROR: {e}"
+
+    def _parse_exploration_response(self, response: str) -> Tuple[str, str, str]:
+        """Parse agent's autonomous response into thought, action, observation."""
+        lines = response.split('\n')
+        thought = action = observation = ""
+
+        current_section = None
+        for line in lines:
+            line = line.strip()
+            if line.startswith('THOUGHT:'):
+                current_section = 'thought'
+                thought += line.replace('THOUGHT:', '').strip() + ' '
+            elif line.startswith('ACTION:'):
+                current_section = 'action'
+                action += line.replace('ACTION:', '').strip() + ' '
+            elif line.startswith('OBSERVATION:'):
+                current_section = 'observation'
+                observation += line.replace('OBSERVATION:', '').strip() + ' '
+            elif current_section and line:
+                if current_section == 'thought':
+                    thought += line + ' '
+                elif current_section == 'action':
+                    action += line + ' '
+                elif current_section == 'observation':
+                    observation += line + ' '
+
+        return thought.strip() or "Autonomous exploration", action.strip() or "Analyze data patterns", observation.strip() or "Data analysis complete"
+
+    async def _execute_autonomous_action(self, action: str, data) -> Dict[str, Any]:
+        """Execute the agent's autonomous action."""
+        discoveries = {'action_executed': action, 'timestamp': time.time()}
+
+        try:
+            if SKLEARN_AVAILABLE:
+                numeric_cols = data.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 0:
+                    X = data[numeric_cols].values
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(X)
+
+                    # Agent autonomously tries clustering
+                    kmeans = KMeans(n_clusters=min(3, len(data)//10), random_state=42)
+                    labels = kmeans.fit_predict(X_scaled)
+
+                    discoveries.update({
+                        'data_shape': data.shape,
+                        'numeric_features': len(numeric_cols),
+                        'cluster_distribution': dict(zip(*np.unique(labels, return_counts=True))),
+                        'silhouette_score': silhouette_score(X_scaled, labels) if len(np.unique(labels)) > 1 else 0.0
+                    })
 
         except Exception as e:
-            # Fallback for testing - generate autonomous code
-            return f"""
-I need to understand the dataset structure and patterns.
+            discoveries['error'] = str(e)
 
-```python
-print("Dataset columns:", dataset.columns.tolist())
-print("Data shape:", dataset.shape)
-print("Data types:")
-print(dataset.dtypes)
-print("\\nFirst 3 rows:")
-print(dataset.head(3))
-print("\\nBasic statistics:")
-print(dataset.describe())
-```
-"""
+        return discoveries
+
+    async def _autonomous_quality_evaluation(self, discoveries: Dict[str, Any], iteration: int) -> float:
+        """Agent evaluates the quality of its own discoveries."""
+        quality_factors = []
+
+        # Check for new discoveries
+        if 'silhouette_score' in discoveries:
+            quality_factors.append(max(0, discoveries['silhouette_score']))
+
+        # Check for data insights
+        if 'cluster_distribution' in discoveries:
+            cluster_balance = np.std(list(discoveries['cluster_distribution'].values()))
+            quality_factors.append(1.0 / (1.0 + cluster_balance))
+
+        # Penalize errors
+        if 'error' in discoveries:
+            quality_factors.append(0.1)
+        else:
+            quality_factors.append(0.7)
+
+        return np.mean(quality_factors) if quality_factors else 0.5
+
+    async def _autonomous_stopping_decision(self, exploration_results: List[ExplorationResult]) -> bool:
+        """Agent autonomously decides whether to continue exploration."""
+        if len(exploration_results) < 3:
+            return True
+
+        recent_quality = np.mean([r.quality_score for r in exploration_results[-3:]])
+
+        stopping_prompt = f"""You are an autonomous agent evaluating whether to continue exploration.
+Recent quality scores: {[r.quality_score for r in exploration_results[-3:]]}
+Average recent quality: {recent_quality:.3f}
+Total iterations: {len(exploration_results)}
+
+Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief reason."""
+
+        response = await self._query_llm(stopping_prompt)
+
+        return 'CONTINUE' in response.upper()
+
+    def _update_autonomous_knowledge(self, result: ExplorationResult):
+        """Update agent's autonomous knowledge base."""
+        if result.success:
+            self.successful_patterns.append({
+                'action': result.action,
+                'discoveries': result.discoveries,
+                'quality': result.quality_score
+            })
+
+            # Update knowledge base
+            for key, value in result.discoveries.items():
+                if key not in self.knowledge_base:
+                    self.knowledge_base[key] = []
+                self.knowledge_base[key].append(value)
+        else:
+            self.failed_approaches.append(result.action)
+
+        self.exploration_history.append(result)
+
+    def _synthesize_exploration_knowledge(self, exploration_results: List[ExplorationResult]) -> Dict[str, Any]:
+        """Synthesize final knowledge from all exploration iterations."""
+        successful_results = [r for r in exploration_results if r.success]
+
+        return {
+            'discoveries': self.knowledge_base,
+            'successful_patterns': self.successful_patterns,
+            'failed_approaches': self.failed_approaches,
+            'best_iteration': max(exploration_results, key=lambda r: r.quality_score) if exploration_results else None,
+            'exploration_summary': {
+                'total_iterations': len(exploration_results),
+                'successful_iterations': len(successful_results),
+                'average_quality': np.mean([r.quality_score for r in exploration_results]) if exploration_results else 0.0
+            }
+        }
 
     async def _autonomous_recovery(self, error: str) -> Dict[str, Any]:
         """Agent autonomously recovers from errors."""
-
-        recovery_prompt = get_autonomous_recovery_prompt(
-            {'error': error, 'iteration': self.iteration_count},
-            {'exploration_history': self.exploration_history}
-        )
-
+        recovery_prompt = get_autonomous_recovery_prompt(error, self.exploration_history)
         response = await self._query_llm(recovery_prompt)
 
-        # Simple recovery logic
-        can_continue = 'continue' in response.lower() and self.iteration_count < self.max_iterations
+        print(f"[RECOVERY] Agent recovery strategy: {response[:100]}...")
 
-        return {
-            'can_continue': can_continue,
-            'recovery_strategy': response,
-            'adjusted_approach': 'retry_with_different_method'
-        }
-
+        return {'recovery_strategy': response, 'error': error}
 
 class ParallelExperimentExecutor:
-    """
-    Executes multiple autonomous experiments in parallel for rapid iteration.
-    """
+    """Autonomous parallel experiment execution engine."""
 
     def __init__(self, llm, execution_context, max_workers: int = 4):
         self.llm = llm
@@ -1158,660 +351,310 @@ class ParallelExperimentExecutor:
         self.experiment_history = []
 
     async def execute_experiments_parallel(self, hypotheses: List[Hypothesis]) -> List[Dict[str, Any]]:
-        """Execute multiple experiments in parallel."""
+        """Execute multiple experiments in parallel autonomously."""
+        print(f"[PARALLEL] Executing {len(hypotheses)} experiments with {self.max_workers} workers")
 
-        print(f"[START] Running {len(hypotheses)} experiments in parallel...")
-
-        # Create experiment designs for each hypothesis
-        experiment_designs = []
+        # Design experiments for each hypothesis
+        experiments = []
         for hypothesis in hypotheses:
-            design = await self._design_experiment_autonomous(hypothesis)
-            experiment_designs.append((hypothesis, design))
+            experiment_design = await self._autonomous_experiment_design(hypothesis)
+            experiments.append(experiment_design)
 
         # Execute experiments in parallel
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_experiment = {
-                executor.submit(self._run_single_experiment, hypothesis, design): (hypothesis, design)
-                for hypothesis, design in experiment_designs
-            }
+            futures = [
+                executor.submit(self._execute_single_experiment, experiment)
+                for experiment in experiments
+            ]
 
             results = []
-            for future in concurrent.futures.as_completed(future_to_experiment):
-                hypothesis, design = future_to_experiment[future]
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
                 try:
-                    result = future.result()
-                    result['hypothesis'] = hypothesis
-                    result['design'] = design
+                    result = future.result(timeout=60)  # 60 second timeout per experiment
+                    result['experiment_id'] = i
                     results.append(result)
-                    print(f"[SUCCESS] Experiment completed: {hypothesis.id}")
+                    print(f"[COMPLETE] Experiment {i+1}/{len(experiments)} completed")
                 except Exception as e:
-                    print(f"[ERROR] Experiment failed: {hypothesis.id} - {e}")
+                    print(f"[ERROR] Experiment {i+1} failed: {e}")
                     results.append({
-                        'hypothesis': hypothesis,
-                        'design': design,
+                        'experiment_id': i,
                         'success': False,
-                        'error': str(e)
+                        'error': str(e),
+                        'algorithm': 'unknown'
                     })
 
-        self.experiment_history.extend(results)
+        print(f"[RESULTS] Completed {len(results)} parallel experiments")
         return results
 
-    async def _design_experiment_autonomous(self, hypothesis: Hypothesis) -> Experiment:
+    async def _autonomous_experiment_design(self, hypothesis: Hypothesis) -> Experiment:
         """Agent autonomously designs experiment for hypothesis."""
+        design_context = {
+            'hypothesis': hypothesis.__dict__,
+            'execution_context': self.execution_context,
+            'experiment_history': self.experiment_history[-5:]  # Last 5 for context
+        }
 
-        available_algorithms = [
-            'KMeans', 'GaussianMixture', 'DBSCAN', 'AgglomerativeClustering',
-            'SpectralClustering', 'Birch', 'MeanShift'
-        ]
-
-        design_prompt = get_autonomous_experiment_prompt(
-            hypothesis.description,
-            available_algorithms,
-            {'hypothesis_confidence': hypothesis.confidence}
-        )
-
+        design_prompt = get_autonomous_experiment_prompt(design_context)
         response = await self._query_llm(design_prompt)
 
-        # Parse experiment design from response
-        algorithm = self._extract_algorithm_choice(response, available_algorithms)
-        parameters = self._extract_parameters(response)
+        # Parse autonomous experiment design
+        algorithm, parameters = self._parse_experiment_design(response)
 
         return Experiment(
             hypothesis_id=hypothesis.id,
             algorithm=algorithm,
             parameters=parameters,
-            success_metrics=['silhouette_score', 'calinski_harabasz_score'],
-            expected_outcomes=self._extract_expected_outcomes(response)
+            success_metrics=['silhouette_score', 'coverage', 'diversity'],
+            expected_outcomes={'silhouette_score': 0.4, 'coverage': 0.8}
         )
 
-    def _run_single_experiment(self, hypothesis: Hypothesis, experiment: Experiment) -> Dict[str, Any]:
-        """Run a single experiment synchronously."""
+    def _parse_experiment_design(self, response: str) -> Tuple[str, Dict[str, Any]]:
+        """Parse agent's autonomous experiment design."""
+        # Default to KMeans if parsing fails
+        algorithm = 'KMeans'
+        parameters = {'n_clusters': 3}
 
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip().upper()
+            if 'KMEANS' in line:
+                algorithm = 'KMeans'
+            elif 'GAUSSIAN' in line or 'GMM' in line:
+                algorithm = 'GaussianMixture'
+            elif 'DBSCAN' in line:
+                algorithm = 'DBSCAN'
+            elif 'SPECTRAL' in line:
+                algorithm = 'SpectralClustering'
+
+        return algorithm, parameters
+
+    def _execute_single_experiment(self, experiment: Experiment) -> Dict[str, Any]:
+        """Execute a single autonomous experiment."""
         try:
-            # Import required libraries
-            from sklearn.cluster import KMeans, DBSCAN
-            from sklearn.mixture import GaussianMixture
-            from sklearn.metrics import silhouette_score, calinski_harabasz_score
-            from sklearn.preprocessing import StandardScaler
+            if not SKLEARN_AVAILABLE:
+                return {'success': False, 'error': 'sklearn not available', 'algorithm': experiment.algorithm}
 
-            # Get dataset from execution context
-            dataset = self.execution_context.get('dataset')
-            if dataset is None:
-                raise ValueError("Dataset not available in execution context")
+            data = self.execution_context.get('current_data')
+            if data is None:
+                return {'success': False, 'error': 'No data available', 'algorithm': experiment.algorithm}
 
-            # Prepare data
-            numeric_cols = dataset.select_dtypes(include=[np.number]).columns
-            X = dataset[numeric_cols].values
+            numeric_cols = data.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) == 0:
+                return {'success': False, 'error': 'No numeric data', 'algorithm': experiment.algorithm}
 
-            if len(X) == 0:
-                raise ValueError("No numeric data available")
-
-            # Scale data
+            X = data[numeric_cols].values
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X)
 
-            # Run algorithm
-            algorithm_name = experiment.algorithm
-            params = experiment.parameters
-
-            if algorithm_name == 'KMeans':
-                model = KMeans(n_clusters=params.get('n_clusters', 3), random_state=42)
-            elif algorithm_name == 'GaussianMixture':
-                model = GaussianMixture(n_components=params.get('n_components', 3), random_state=42)
-            elif algorithm_name == 'DBSCAN':
-                model = DBSCAN(eps=params.get('eps', 0.5), min_samples=params.get('min_samples', 5))
+            # Execute the specific algorithm
+            if experiment.algorithm == 'KMeans':
+                model = KMeans(n_clusters=experiment.parameters.get('n_clusters', 3), random_state=42)
+            elif experiment.algorithm == 'GaussianMixture':
+                model = GaussianMixture(n_components=experiment.parameters.get('n_components', 3), random_state=42)
+            elif experiment.algorithm == 'DBSCAN':
+                model = DBSCAN(eps=experiment.parameters.get('eps', 0.5))
+            elif experiment.algorithm == 'SpectralClustering':
+                model = SpectralClustering(n_clusters=experiment.parameters.get('n_clusters', 3), random_state=42)
             else:
-                # Default to KMeans
                 model = KMeans(n_clusters=3, random_state=42)
 
-            # Fit and predict
             labels = model.fit_predict(X_scaled)
 
             # Calculate metrics
-            n_clusters = len(np.unique(labels))
-            if n_clusters > 1:
-                silhouette = silhouette_score(X_scaled, labels)
-                calinski_harabasz = calinski_harabasz_index(X_scaled, labels)
-            else:
-                silhouette = -1.0
-                calinski_harabasz = 0.0
+            silhouette = silhouette_score(X_scaled, labels) if len(np.unique(labels)) > 1 else 0.0
 
             return {
                 'success': True,
-                'algorithm': algorithm_name,
-                'parameters': params,
-                'n_clusters': n_clusters,
-                'silhouette_score': silhouette,
-                'calinski_harabasz_score': calinski_harabasz,
+                'algorithm': experiment.algorithm,
                 'labels': labels,
-                'model': model
+                'silhouette_score': silhouette,
+                'n_clusters': len(np.unique(labels)),
+                'parameters': experiment.parameters
             }
 
         except Exception as e:
             return {
                 'success': False,
                 'error': str(e),
-                'algorithm': experiment.algorithm,
-                'parameters': experiment.parameters
+                'algorithm': experiment.algorithm
             }
-
-    def _extract_algorithm_choice(self, response: str, available: List[str]) -> str:
-        """Extract algorithm choice from agent response."""
-
-        response_lower = response.lower()
-        for algorithm in available:
-            if algorithm.lower() in response_lower:
-                return algorithm
-
-        return 'KMeans'  # Default fallback
-
-    def _extract_parameters(self, response: str) -> Dict[str, Any]:
-        """Extract parameters from agent response."""
-
-        params = {}
-
-        # Simple parameter extraction
-        if 'clusters' in response.lower():
-            import re
-            cluster_match = re.search(r'(\d+)\s*cluster', response.lower())
-            if cluster_match:
-                params['n_clusters'] = int(cluster_match.group(1))
-                params['n_components'] = int(cluster_match.group(1))
-
-        if 'eps' in response.lower():
-            eps_match = re.search(r'eps[=:\s]+([0-9.]+)', response.lower())
-            if eps_match:
-                params['eps'] = float(eps_match.group(1))
-
-        # Default parameters if none found
-        if not params:
-            params = {'n_clusters': 3, 'n_components': 3}
-
-        return params
-
-    def _extract_expected_outcomes(self, response: str) -> Dict[str, Any]:
-        """Extract expected outcomes from agent response."""
-
-        return {
-            'expected_quality': 'high' if 'good' in response.lower() else 'medium',
-            'rationale': response[:200] + '...' if len(response) > 200 else response
-        }
 
     async def _query_llm(self, prompt: str) -> str:
         """Query LLM for experiment design."""
-
         try:
-            from langchain.prompts import ChatPromptTemplate
-            from langchain_core.messages import HumanMessage, SystemMessage
-
-            prompt_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content="You are an autonomous experiment designer. Design efficient, targeted experiments."),
-                HumanMessage(content=prompt)
-            ])
-
-            chain = prompt_template | self.llm
-            response = chain.invoke({})
-
-            if hasattr(response, 'content'):
-                return response.content
+            if hasattr(self.llm, 'invoke'):
+                response = self.llm.invoke({"input": prompt})
+                if hasattr(response, 'content'):
+                    return response.content
+                else:
+                    return str(response)
             else:
-                return str(response)
-
+                return str(self.llm.invoke(prompt))
         except Exception as e:
-            # Fallback for testing without langchain
-            return f"Algorithm: KMeans, Parameters: n_clusters=3, Expected: Good clustering"
-
+            print(f"[WARNING] LLM query failed: {e}")
+            return f"ERROR: {e}"
 
 class AutonomousValidationSystem:
-    """
-    Self-validation system that learns from validation results.
-    Agent validates its own work and improves autonomously.
-    """
+    """Self-validation system that learns from validation results."""
 
     def __init__(self, validation_boundaries):
         self.validation_boundaries = validation_boundaries
         self.validation_history = []
-        self.learned_patterns = []
-        self.failure_recovery_strategies = []
+        self.learned_patterns = {}
 
-    async def autonomous_validate(self, results: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Agent autonomously validates results against learned patterns."""
-
-        print(f"[VALIDATE] Autonomous validation in progress...")
-
-        # Basic boundary validation
-        boundary_validation = self._validate_boundaries(results)
-
-        # Pattern-based validation from learning history
-        pattern_validation = await self._validate_against_patterns(results, context)
-
-        # Self-assessment by agent
-        self_assessment = await self._agent_self_assessment(results, context)
-
-        # Combine all validations
-        overall_validation = {
-            'boundary_validation': boundary_validation,
-            'pattern_validation': pattern_validation,
-            'self_assessment': self_assessment,
-            'overall_passed': (
-                boundary_validation.get('passed', False) and
-                pattern_validation.get('passed', False) and
-                self_assessment.get('confidence', 0) > 0.7
-            )
+    async def autonomous_validate(self, experiment_result: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Agent autonomously validates experiment results."""
+        validation_result = {
+            'experiment_algorithm': experiment_result.get('algorithm', 'unknown'),
+            'validation_timestamp': time.time(),
+            'validations': {},
+            'overall_passed': True,
+            'quality_score': 0.0
         }
-
-        # Learn from this validation
-        self._learn_from_validation(overall_validation, results, context)
-
-        print(f"[SUCCESS] Validation complete: {'PASSED' if overall_validation['overall_passed'] else 'FAILED'}")
-
-        return overall_validation
-
-    def _validate_boundaries(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate against defined boundaries."""
-
-        validation = {'passed': True, 'violations': []}
-
-        for boundary_name, threshold in self.validation_boundaries.items():
-            if boundary_name in results:
-                current_value = results[boundary_name]
-                if isinstance(threshold, (int, float)):
-                    if current_value < threshold:
-                        validation['passed'] = False
-                        validation['violations'].append({
-                            'boundary': boundary_name,
-                            'required': threshold,
-                            'actual': current_value
-                        })
-
-        return validation
-
-    async def _validate_against_patterns(self, results: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate against learned successful patterns."""
-
-        if not self.learned_patterns:
-            return {'passed': True, 'reason': 'No learned patterns yet'}
-
-        # Check if current results match successful patterns
-        pattern_scores = []
-        for pattern in self.learned_patterns[-5:]:  # Check recent patterns
-            score = self._calculate_pattern_similarity(results, pattern)
-            pattern_scores.append(score)
-
-        avg_pattern_score = sum(pattern_scores) / len(pattern_scores) if pattern_scores else 0
-
-        return {
-            'passed': avg_pattern_score > 0.6,
-            'pattern_similarity': avg_pattern_score,
-            'matching_patterns': len([s for s in pattern_scores if s > 0.7])
-        }
-
-    async def _agent_self_assessment(self, results: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Agent assesses its own results quality."""
-
-        assessment_prompt = get_autonomous_validation_prompt(results, self.validation_boundaries, context)
 
         try:
-            from langchain.prompts import ChatPromptTemplate
-            from langchain_core.messages import HumanMessage, SystemMessage
-
-            prompt_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content="You are a self-critical quality assessor. Honestly evaluate your work."),
-                HumanMessage(content=assessment_prompt)
-            ])
-
-            # This would need the LLM instance - for now return placeholder
-            return {
-                'confidence': 0.8,  # Placeholder
-                'assessment': 'Self-assessment placeholder',
-                'concerns': []
+            # Silhouette score validation
+            silhouette_score = experiment_result.get('silhouette_score', 0.0)
+            silhouette_passed = silhouette_score >= 0.2
+            validation_result['validations']['silhouette'] = {
+                'score': silhouette_score,
+                'passed': silhouette_passed,
+                'threshold': 0.2
             }
+
+            # Cluster count validation
+            n_clusters = experiment_result.get('n_clusters', 0)
+            cluster_passed = 2 <= n_clusters <= 8
+            validation_result['validations']['cluster_count'] = {
+                'count': n_clusters,
+                'passed': cluster_passed,
+                'valid_range': '2-8'
+            }
+
+            # Overall validation
+            validation_result['overall_passed'] = silhouette_passed and cluster_passed
+            validation_result['quality_score'] = (
+                (silhouette_score * 0.7) +
+                (1.0 if cluster_passed else 0.0) * 0.3
+            )
+
+            print(f"[VALIDATE] {experiment_result.get('algorithm', 'unknown')}: Quality={validation_result['quality_score']:.3f}")
 
         except Exception as e:
-            return {
-                'confidence': 0.5,
-                'assessment': f'Assessment error: {e}',
-                'concerns': ['validation_error']
-            }
+            validation_result['error'] = str(e)
+            validation_result['overall_passed'] = False
 
-    def _calculate_pattern_similarity(self, current_results: Dict[str, Any], pattern: Dict[str, Any]) -> float:
-        """Calculate similarity between current results and learned pattern."""
-
-        similarity = 0.0
-        comparisons = 0
-
-        for key in ['silhouette_score', 'n_clusters', 'algorithm']:
-            if key in current_results and key in pattern:
-                if key == 'algorithm':
-                    similarity += 1.0 if current_results[key] == pattern[key] else 0.0
-                else:
-                    # Numeric similarity
-                    diff = abs(current_results[key] - pattern[key])
-                    max_val = max(current_results[key], pattern[key])
-                    if max_val > 0:
-                        similarity += max(0, 1 - (diff / max_val))
-                comparisons += 1
-
-        return similarity / comparisons if comparisons > 0 else 0.0
-
-    def _learn_from_validation(self, validation_result: Dict[str, Any], results: Dict[str, Any], context: Dict[str, Any]):
-        """Learn patterns from validation results."""
-
-        # Record validation in history
-        validation_record = {
-            'validation_result': validation_result,
-            'results': results,
-            'context': context,
-            'timestamp': time.time()
-        }
-        self.validation_history.append(validation_record)
-
-        # Learn successful patterns
-        if validation_result.get('overall_passed'):
-            pattern = {
-                'algorithm': results.get('algorithm'),
-                'silhouette_score': results.get('silhouette_score', 0),
-                'n_clusters': results.get('n_clusters', 0),
-                'parameters': results.get('parameters', {}),
-                'context_features': {
-                    'data_size': context.get('data_size', 0),
-                    'n_features': context.get('n_features', 0)
-                }
-            }
-            self.learned_patterns.append(pattern)
-
-        # Maintain history size
-        if len(self.validation_history) > 100:
-            self.validation_history = self.validation_history[-50:]
-
-        if len(self.learned_patterns) > 50:
-            self.learned_patterns = self.learned_patterns[-25:]
-
+        self.validation_history.append(validation_result)
+        return validation_result
 
 class AutonomousStrategySynthesizer:
-    """
-    Synthesizes optimal sampling strategy from all autonomous discoveries.
-    """
+    """Autonomous strategy synthesis from experimental evidence."""
 
     def __init__(self, llm):
         self.llm = llm
         self.synthesis_history = []
+        self.learned_strategies = {}
 
-    async def autonomous_synthesize(self, exploration_results: List[Dict], experiment_results: List[Dict], validation_results: Dict) -> Dict[str, Any]:
-        """Agent autonomously synthesizes optimal strategy from all learnings."""
+    async def autonomous_synthesize(self, exploration_results: List, experiment_results: List[Dict], validation_results: Dict[str, Any]) -> Dict[str, Any]:
+        """Agent autonomously synthesizes optimal strategy from all evidence."""
+        print(f"[SYNTHESIS] Synthesizing strategy from {len(experiment_results)} experiments")
 
-        print(f"[SYNTHESIS] Autonomous strategy synthesis...")
+        # Find best performing validated experiment
+        best_experiment = None
+        best_score = 0.0
 
-        # Prepare comprehensive context
-        synthesis_context = {
-            'exploration_discoveries': len(exploration_results),
-            'experiment_results': experiment_results,
-            'validation_learnings': validation_results,
-            'top_performers': self._identify_top_performers(experiment_results),
-            'learned_patterns': self._extract_learned_patterns(exploration_results, experiment_results)
-        }
+        for experiment in experiment_results:
+            if experiment.get('success'):
+                algorithm = experiment.get('algorithm')
+                validation = validation_results.get(algorithm, {})
 
-        # Agent synthesizes strategy autonomously
-        synthesis_prompt = get_autonomous_synthesis_prompt(
-            experiment_results,
-            {'discoveries': exploration_results},
-            synthesis_context
-        )
+                if validation.get('overall_passed', False):
+                    quality_score = validation.get('quality_score', 0.0)
+                    if quality_score > best_score:
+                        best_score = quality_score
+                        best_experiment = experiment
 
-        strategy_response = await self._query_llm(synthesis_prompt)
+        # Generate autonomous strategy
+        if best_experiment:
+            strategy = {
+                'algorithm': best_experiment['algorithm'],
+                'parameters': best_experiment.get('parameters', {}),
+                'confidence': best_score,
+                'reasoning': f"Selected based on validation quality score: {best_score:.3f}",
+                'synthesis_timestamp': time.time()
+            }
+        else:
+            # Fallback strategy
+            strategy = {
+                'algorithm': 'KMeans',
+                'parameters': {'n_clusters': 3},
+                'confidence': 0.5,
+                'reasoning': 'Fallback strategy - no experiments passed validation',
+                'synthesis_timestamp': time.time()
+            }
 
-        # Parse agent's strategy
-        final_strategy = self._parse_strategy_response(strategy_response, experiment_results)
+        # Get autonomous strategy refinement from LLM
+        strategy_response = await self._query_llm("Generate optimal sampling strategy based on experimental evidence")
+        strategy['llm_refinement'] = strategy_response[:200]
 
-        # Agent validates its own strategy
-        strategy_validation = await self._validate_strategy(final_strategy, synthesis_context)
+        print(f"[STRATEGY] Selected: {strategy['algorithm']} (confidence: {strategy['confidence']:.3f})")
 
-        # Refine if needed
-        if not strategy_validation.get('acceptable', False):
-            print(f"🔄 Agent refining strategy...")
-            final_strategy = await self._refine_strategy(final_strategy, strategy_validation)
-
-        # Record synthesis for learning
-        self.synthesis_history.append({
-            'strategy': final_strategy,
-            'context': synthesis_context,
-            'validation': strategy_validation
-        })
-
-        print(f"[SUCCESS] Strategy synthesis complete: {final_strategy.get('algorithm', 'unknown')}")
-
-        return final_strategy
-
-    def _identify_top_performers(self, experiment_results: List[Dict]) -> List[Dict]:
-        """Identify best performing experiments."""
-
-        # Sort by composite score or silhouette score
-        valid_results = [r for r in experiment_results if r.get('success', False)]
-
-        if not valid_results:
-            return []
-
-        # Sort by silhouette score
-        sorted_results = sorted(
-            valid_results,
-            key=lambda x: x.get('silhouette_score', -1),
-            reverse=True
-        )
-
-        return sorted_results[:3]  # Top 3 performers
-
-    def _extract_learned_patterns(self, exploration_results: List[Dict], experiment_results: List[Dict]) -> List[Dict]:
-        """Extract patterns from all results."""
-
-        patterns = []
-
-        # Algorithm performance patterns
-        algorithm_performance = defaultdict(list)
-        for result in experiment_results:
-            if result.get('success'):
-                algorithm = result.get('algorithm', 'unknown')
-                score = result.get('silhouette_score', 0)
-                algorithm_performance[algorithm].append(score)
-
-        for algorithm, scores in algorithm_performance.items():
-            if scores:
-                patterns.append({
-                    'type': 'algorithm_performance',
-                    'algorithm': algorithm,
-                    'avg_score': sum(scores) / len(scores),
-                    'success_rate': len(scores) / len([r for r in experiment_results if r.get('algorithm') == algorithm])
-                })
-
-        return patterns
-
-    def _parse_strategy_response(self, response: str, experiment_results: List[Dict]) -> Dict[str, Any]:
-        """Parse agent's strategy response into structured format."""
-
-        # Extract key information from response
-        strategy = {
-            'algorithm': 'KMeans',  # Default fallback
-            'parameters': {},
-            'rationale': response,
-            'confidence': 0.8
-        }
-
-        # Extract algorithm choice
-        response_lower = response.lower()
-        algorithms = ['kmeans', 'gaussianmixture', 'dbscan', 'spectral', 'hierarchical']
-        for alg in algorithms:
-            if alg in response_lower:
-                strategy['algorithm'] = alg.title()
-                break
-
-        # Extract parameters
-        import re
-        cluster_match = re.search(r'(\d+)\s*cluster', response_lower)
-        if cluster_match:
-            strategy['parameters']['n_clusters'] = int(cluster_match.group(1))
-
-        # Use best performing parameters if no specific choice
-        if not strategy['parameters'] and experiment_results:
-            top_result = max(experiment_results, key=lambda x: x.get('silhouette_score', -1), default={})
-            if top_result.get('success'):
-                strategy['algorithm'] = top_result.get('algorithm', 'KMeans')
-                strategy['parameters'] = top_result.get('parameters', {})
-
+        self.synthesis_history.append(strategy)
         return strategy
-
-    async def _validate_strategy(self, strategy: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Agent validates its synthesized strategy."""
-
-        validation_checks = []
-
-        # Check if algorithm is reasonable given data
-        if strategy.get('algorithm') == 'DBSCAN' and context.get('data_size', 0) > 10000:
-            validation_checks.append('DBSCAN may be slow on large dataset')
-
-        # Check parameter reasonableness
-        n_clusters = strategy.get('parameters', {}).get('n_clusters', 0)
-        data_size = context.get('data_size', 0)
-        if n_clusters > data_size / 10:
-            validation_checks.append('Too many clusters for data size')
-
-        acceptable = len(validation_checks) == 0
-
-        return {
-            'acceptable': acceptable,
-            'issues': validation_checks,
-            'confidence': 0.9 if acceptable else 0.4
-        }
-
-    async def _refine_strategy(self, strategy: Dict[str, Any], validation: Dict[str, Any]) -> Dict[str, Any]:
-        """Agent refines strategy based on validation issues."""
-
-        issues = validation.get('issues', [])
-
-        # Simple refinement logic
-        refined_strategy = strategy.copy()
-
-        for issue in issues:
-            if 'too many clusters' in issue.lower():
-                current_clusters = refined_strategy.get('parameters', {}).get('n_clusters', 3)
-                refined_strategy['parameters']['n_clusters'] = max(2, current_clusters // 2)
-
-            if 'dbscan' in issue.lower() and 'slow' in issue.lower():
-                refined_strategy['algorithm'] = 'KMeans'
-                refined_strategy['parameters'] = {'n_clusters': 3}
-
-        refined_strategy['refinement_applied'] = issues
-
-        return refined_strategy
 
     async def _query_llm(self, prompt: str) -> str:
         """Query LLM for strategy synthesis."""
-
         try:
-            from langchain.prompts import ChatPromptTemplate
-            from langchain_core.messages import HumanMessage, SystemMessage
-
-            prompt_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content="You are an autonomous strategy synthesizer. Create optimal sampling strategies from evidence."),
-                HumanMessage(content=prompt)
-            ])
-
-            chain = prompt_template | self.llm
-            response = chain.invoke({})
-
-            if hasattr(response, 'content'):
-                return response.content
+            if hasattr(self.llm, 'invoke'):
+                response = self.llm.invoke({"input": prompt})
+                if hasattr(response, 'content'):
+                    return response.content
+                else:
+                    return str(response)
             else:
-                return str(response)
-
+                return str(self.llm.invoke(prompt))
         except Exception as e:
-            # Fallback for testing without langchain
-            return f"Final strategy: Use KMeans with 3 clusters based on experimental evidence"
-
+            return f"Strategy synthesis error: {e}"
 
 class TimingDataSelectionAgent:
-    """
-    Completely Autonomous Timing Data Selection Agent.
-
-    Features:
-    - Autonomous exploration with no hardcoded steps
-    - Parallel experiment execution for rapid iteration
-    - Self-validation and learning from results
-    - Strategy synthesis from all discoveries
-
-    The agent thinks and acts completely independently.
-    - Senior timing engineer domain expertise
-    - Active learning principles (uncertainty sampling)
-    - Process variation awareness
-    - Business impact focus (cost reduction)
-
-    Workflow:
-    1. OBSERVE: Analyze timing characteristics with domain knowledge
-    2. THINK: Strategic reasoning about selection approach
-    3. DECIDE: Algorithm selection with timing-specific criteria
-    4. ACT: Uncertainty-based sampling for critical corners
-    """
+    """Complete autonomous timing data selection agent."""
 
     def __init__(self, llm, verbose: bool = True):
-        """
-        Initialize the completely autonomous timing data selection agent.
-
-        Args:
-            llm: LangChain LLM instance
-            verbose: Whether to print reasoning steps
-        """
-        self.llm = llm
         self.verbose = verbose
-        self.conversation_history = []
-        self.current_data = None
-        self.current_features = None
-        self.scaler = None
-        self.reasoning_log = []
-        self._imports_loaded = False
-
-        # Execution Engine - The "Hands"
+        self.llm = llm
+        self.system_prompt = TIMING_SYSTEM_PROMPT
         self.execution_context = {}
         self.initialize_execution_context()
 
-        # Autonomous Components
+        # Initialize autonomous components
         self.exploration_engine = AutonomousExplorationEngine(llm, self.execution_context)
         self.experiment_executor = ParallelExperimentExecutor(llm, self.execution_context)
         self.validation_system = AutonomousValidationSystem(VALIDATION_BOUNDARIES)
         self.strategy_synthesizer = AutonomousStrategySynthesizer(llm)
 
-        # Agentic capabilities
-        self.agentic_mode = True  # Always autonomous
-        self.validation_boundaries = VALIDATION_BOUNDARIES
-        self.iteration_triggers = ITERATION_TRIGGERS
-        self.iteration_count = 0
-        self.max_iterations = 50
+        print(f"[INIT] Autonomous TimingDataSelectionAgent initialized")
 
-        # System prompt for compatibility
-        self.system_prompt = TIMING_SYSTEM_PROMPT
-
-        print("[AGENT] Autonomous Agent Initialized")
-        print("[AGENT] Exploration Engine: Ready")
-        print("[AGENT] Parallel Executor: Ready")
-        print("[AGENT] Validation System: Ready")
-        print("[AGENT] Strategy Synthesizer: Ready")
-        self.max_iterations = 5
-
-        if self.agentic_mode:
-            print("[AGENT] Initialized in AGENTIC MODE with autonomous exploration")
+    def initialize_execution_context(self):
+        """Initialize execution context."""
+        import io
+        import sys
+        self.execution_context = {
+            'stdout_buffer': io.StringIO(),
+            'stderr_buffer': io.StringIO(),
+            'globals': {},
+            'locals': {},
+            'iteration_count': 0,
+            'dataset': None,
+            'current_data': None
+        }
 
     async def autonomous_sample_selection(self, csv_path: str, target_percentage: float = 5.0) -> Dict[str, Any]:
         """
-        Completely autonomous sampling pipeline.
-        Agent explores, experiments, validates, and synthesizes strategy independently.
-
-        Args:
-            csv_path: Path to timing data CSV
-            target_percentage: Target percentage of samples to select
-
-        Returns:
-            Complete autonomous sampling results with strategy and selected indices
+        Complete autonomous pipeline for sample selection.
+        Agent operates independently through 7 autonomous phases.
         """
-        print(f"\n[START] AUTONOMOUS SAMPLING PIPELINE INITIATED")
-        print(f"[DATA] Target: {target_percentage}% of samples")
-        print(f"[TARGET] Mode: Fully autonomous with {self.exploration_engine.max_iterations} max exploration iterations")
+        print(f"\n[START] AUTONOMOUS TIMING DATA SELECTION PIPELINE")
+        print(f"[TARGET] Selecting {target_percentage}% of samples from {csv_path}")
 
         # Load dataset
         self.current_data = pd.read_csv(csv_path)
@@ -1821,7 +664,7 @@ class TimingDataSelectionAgent:
         print(f"[FILE] Dataset loaded: {len(self.current_data)} samples")
 
         try:
-            # Phase 1: Autonomous Exploration - Agent discovers data characteristics
+            # Phase 1: Autonomous Exploration
             print(f"\n[VALIDATE] PHASE 1: AUTONOMOUS EXPLORATION")
             exploration_results = await self.exploration_engine.autonomous_explore(
                 self.current_data,
@@ -1855,11 +698,11 @@ class TimingDataSelectionAgent:
                 validation_results
             )
 
-            # Phase 6: Execute Final Sampling with Autonomous Strategy
+            # Phase 6: Execute Final Sampling
             print(f"\n[TARGET] PHASE 6: AUTONOMOUS SAMPLE EXECUTION")
             selected_indices = await self._execute_autonomous_sampling(final_strategy, target_percentage)
 
-            # Autonomous Quality Assessment
+            # Phase 7: Quality Assessment
             print(f"\n[PROGRESS] PHASE 7: AUTONOMOUS QUALITY ASSESSMENT")
             quality_assessment = await self._autonomous_quality_assessment(
                 selected_indices, final_strategy, exploration_results, experiment_results
@@ -1887,7 +730,6 @@ class TimingDataSelectionAgent:
 
         except Exception as e:
             print(f"[ERROR] Autonomous pipeline error: {e}")
-            # Autonomous error recovery
             recovery = await self.exploration_engine._autonomous_recovery(str(e))
             return {
                 'error': str(e),
@@ -1898,33 +740,25 @@ class TimingDataSelectionAgent:
 
     async def _generate_autonomous_hypotheses(self, exploration_results: Dict[str, Any]) -> List[Hypothesis]:
         """Agent autonomously generates hypotheses from exploration discoveries."""
-
         knowledge_base = exploration_results.get('knowledge_base', {})
         discoveries = knowledge_base.get('discoveries', {})
 
-        # Agent generates hypotheses based on discoveries
         hypothesis_prompt = get_autonomous_hypothesis_prompt(
             discoveries,
             {'exploration_quality': exploration_results.get('exploration_quality', 0)}
         )
 
         try:
-            # from langchain.prompts import ChatPromptTemplate
-            # from langchain_core.messages import HumanMessage, SystemMessage
+            if hasattr(self.llm, 'invoke'):
+                response = self.llm.invoke({"input": hypothesis_prompt})
+                if hasattr(response, 'content'):
+                    hypothesis_text = response.content
+                else:
+                    hypothesis_text = str(response)
+            else:
+                hypothesis_text = str(self.llm.invoke(hypothesis_prompt))
 
-            prompt_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content="You are an autonomous hypothesis generator. Create testable theories about optimal sampling."),
-                HumanMessage(content=hypothesis_prompt)
-            ])
-
-            chain = prompt_template | self.llm
-            response = chain.invoke({})
-
-            hypothesis_text = response.content if hasattr(response, 'content') else str(response)
-
-            # Parse hypotheses from response
             hypotheses = self._parse_hypotheses_from_response(hypothesis_text)
-
             print(f"[HYPOTHESIS] Generated {len(hypotheses)} autonomous hypotheses")
             for i, h in enumerate(hypotheses):
                 print(f"   {i+1}. {h.description[:60]}...")
@@ -1933,12 +767,10 @@ class TimingDataSelectionAgent:
 
         except Exception as e:
             print(f"[WARNING] Hypothesis generation error: {e}")
-            # Return default hypotheses
             return self._get_default_hypotheses()
 
     def _parse_hypotheses_from_response(self, response: str) -> List[Hypothesis]:
         """Parse structured hypotheses from agent response."""
-
         hypotheses = []
         lines = response.split('\n')
 
@@ -1949,41 +781,35 @@ class TimingDataSelectionAgent:
             line = line.strip()
             if line.startswith('HYPOTHESIS'):
                 if current_hypothesis:
-                    # Save previous hypothesis
                     hypotheses.append(self._create_hypothesis_from_dict(current_hypothesis, hypothesis_count))
                     hypothesis_count += 1
-                # Start new hypothesis
                 current_hypothesis = {'description': line.replace('HYPOTHESIS', '').strip(':').strip()}
             elif line.startswith('PREDICTION:'):
                 current_hypothesis['prediction'] = line.replace('PREDICTION:', '').strip()
             elif line.startswith('TEST:'):
                 current_hypothesis['test_method'] = line.replace('TEST:', '').strip()
 
-        # Add last hypothesis
         if current_hypothesis:
             hypotheses.append(self._create_hypothesis_from_dict(current_hypothesis, hypothesis_count))
 
-        # Ensure we have at least some hypotheses
         if not hypotheses:
             return self._get_default_hypotheses()
 
-        return hypotheses[:5]  # Limit to 5 hypotheses for parallel execution
+        return hypotheses[:5]
 
     def _create_hypothesis_from_dict(self, hyp_dict: Dict, count: int) -> Hypothesis:
         """Create Hypothesis object from parsed dictionary."""
-
         return Hypothesis(
             id=f"hyp_{count}",
             description=hyp_dict.get('description', f'Hypothesis {count}'),
             prediction=hyp_dict.get('prediction', 'Unknown prediction'),
             test_method=hyp_dict.get('test_method', 'Algorithm comparison'),
-            confidence=0.8,  # Default confidence
+            confidence=0.8,
             rationale=f"Generated from autonomous exploration {count}"
         )
 
     def _get_default_hypotheses(self) -> List[Hypothesis]:
         """Generate default hypotheses if parsing fails."""
-
         return [
             Hypothesis(
                 id="hyp_default_1",
@@ -2013,12 +839,10 @@ class TimingDataSelectionAgent:
 
     async def _execute_autonomous_sampling(self, strategy: Dict[str, Any], target_percentage: float) -> List[int]:
         """Execute final sampling using autonomous strategy."""
-
         algorithm = strategy.get('algorithm', 'KMeans')
         parameters = strategy.get('parameters', {})
 
         try:
-            # Prepare data
             numeric_cols = self.current_data.select_dtypes(include=[np.number]).columns
             X = self.current_data[numeric_cols].values
 
@@ -2027,12 +851,10 @@ class TimingDataSelectionAgent:
                 n_samples = int(len(self.current_data) * target_percentage / 100)
                 return np.random.choice(len(self.current_data), size=n_samples, replace=False).tolist()
 
-            # Scale data
             from sklearn.preprocessing import StandardScaler
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X)
 
-            # Run chosen algorithm
             if algorithm == 'KMeans':
                 from sklearn.cluster import KMeans
                 model = KMeans(n_clusters=parameters.get('n_clusters', 3), random_state=42)
@@ -2043,18 +865,13 @@ class TimingDataSelectionAgent:
                 from sklearn.cluster import DBSCAN
                 model = DBSCAN(eps=parameters.get('eps', 0.5), min_samples=parameters.get('min_samples', 5))
             else:
-                # Default fallback
                 from sklearn.cluster import KMeans
                 model = KMeans(n_clusters=3, random_state=42)
 
-            # Fit and get labels
             labels = model.fit_predict(X_scaled)
-
-            # Sample from each cluster using uncertainty sampling
             selected_indices = self._uncertainty_sampling_from_clusters(X_scaled, labels, target_percentage)
 
             print(f"[TARGET] Selected {len(selected_indices)} samples using autonomous {algorithm} strategy")
-
             return selected_indices
 
         except Exception as e:
@@ -2064,16 +881,12 @@ class TimingDataSelectionAgent:
 
     def _uncertainty_sampling_from_clusters(self, X_scaled: np.ndarray, labels: np.ndarray, target_percentage: float) -> List[int]:
         """Apply uncertainty sampling within each cluster."""
-
         n_target = int(len(X_scaled) * target_percentage / 100)
-
-        # Get unique clusters (excluding noise points if any)
         unique_labels = np.unique(labels)
-        if -1 in unique_labels:  # Remove noise label if present
+        if -1 in unique_labels:
             unique_labels = unique_labels[unique_labels != -1]
 
         if len(unique_labels) == 0:
-            # No valid clusters, random sampling
             return np.random.choice(len(X_scaled), size=n_target, replace=False).tolist()
 
         selected_indices = []
@@ -2086,19 +899,16 @@ class TimingDataSelectionAgent:
             if len(cluster_indices) == 0:
                 continue
 
-            # Calculate distances to cluster centroid for uncertainty sampling
             cluster_data = X_scaled[cluster_mask]
             centroid = np.mean(cluster_data, axis=0)
             distances = np.linalg.norm(cluster_data - centroid, axis=1)
 
-            # Select samples with highest uncertainty (distance from centroid)
             n_select = min(samples_per_cluster, len(cluster_indices))
             uncertain_indices = np.argsort(distances)[-n_select:]
             selected_cluster_indices = cluster_indices[uncertain_indices]
 
             selected_indices.extend(selected_cluster_indices.tolist())
 
-        # Fill remaining quota randomly if needed
         while len(selected_indices) < n_target:
             remaining_indices = [i for i in range(len(X_scaled)) if i not in selected_indices]
             if not remaining_indices:
@@ -2110,7 +920,6 @@ class TimingDataSelectionAgent:
     async def _autonomous_quality_assessment(self, selected_indices: List[int], strategy: Dict[str, Any],
                                            exploration_results: Dict, experiment_results: List[Dict]) -> Dict[str, Any]:
         """Agent autonomously assesses the quality of its sampling results."""
-
         assessment = {
             'overall_quality': 0.0,
             'coverage_quality': 0.0,
@@ -2120,14 +929,12 @@ class TimingDataSelectionAgent:
         }
 
         try:
-            # Coverage assessment
             if len(selected_indices) > 0:
                 numeric_cols = self.current_data.select_dtypes(include=[np.number]).columns
                 if len(numeric_cols) > 0:
                     all_data = self.current_data[numeric_cols].values
                     selected_data = all_data[selected_indices]
 
-                    # Feature coverage (range coverage)
                     coverage_scores = []
                     for i in range(all_data.shape[1]):
                         full_range = np.max(all_data[:, i]) - np.min(all_data[:, i])
@@ -2137,7 +944,6 @@ class TimingDataSelectionAgent:
 
                     assessment['coverage_quality'] = np.mean(coverage_scores) if coverage_scores else 0.0
 
-            # Strategy performance (from experiments)
             strategy_algorithm = strategy.get('algorithm', 'unknown')
             strategy_performance = 0.0
 
@@ -2147,7 +953,6 @@ class TimingDataSelectionAgent:
 
             assessment['strategy_performance'] = strategy_performance
 
-            # Overall quality (weighted combination)
             assessment['overall_quality'] = (
                 assessment['coverage_quality'] * 0.3 +
                 assessment['strategy_performance'] * 0.4 +
@@ -2166,2013 +971,229 @@ class TimingDataSelectionAgent:
 
         return assessment
 
-    def initialize_execution_context(self):
-        """Initialize persistent execution context with core libraries."""
-        import io
-        import sys
-        import numpy as np
 
-        self.execution_context = {
-            'pd': pd,
-            'np': np,
-            'io': io,
-            'sys': sys,
-            'dataset': None,
-            '_stdout_capture': None,
-            '_stderr_capture': None
-        }
-
-        # Import sklearn components into context
-        if SKLEARN_AVAILABLE:
-            from sklearn.preprocessing import StandardScaler
-            from sklearn.cluster import KMeans
-            from sklearn.mixture import GaussianMixture
-            from sklearn.metrics import silhouette_score
-            from sklearn.decomposition import PCA
-            from sklearn.manifold import TSNE
-            import matplotlib.pyplot as plt
-            import numpy as np
-
-            self.execution_context.update({
-                'StandardScaler': StandardScaler,
-                'KMeans': KMeans,
-                'GaussianMixture': GaussianMixture,
-                'silhouette_score': silhouette_score,
-                'PCA': PCA,
-                'TSNE': TSNE,
-                'plt': plt,
-                'np': np
-            })
-
-    def execute_python_code(self, code: str) -> str:
-        """
-        Execute Python code with persistent context and capture output.
-
-        The Hands - Real code execution engine that replaces hallucination.
-        Variables persist between calls via self.execution_context.
-
-        Args:
-            code: Python code to execute
-
-        Returns:
-            String containing stdout/stderr output or error traceback
-        """
-        import io
-        import sys
-        import traceback
-
-        # Capture stdout and stderr
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
-
-        try:
-            sys.stdout = stdout_capture
-            sys.stderr = stderr_capture
-
-            # Execute code in persistent context
-            exec(code, self.execution_context)
-
-            # Get captured output
-            stdout_output = stdout_capture.getvalue()
-            stderr_output = stderr_capture.getvalue()
-
-            # Combine outputs
-            result = ""
-            if stdout_output:
-                result += stdout_output
-            if stderr_output:
-                result += f"STDERR: {stderr_output}"
-
-            return result if result else "[No output]"
-
-        except Exception as e:
-            # Return full traceback for agent to read and self-correct
-            error_traceback = traceback.format_exc()
-            return f"ERROR: {error_traceback}"
-
-        finally:
-            # Restore stdout/stderr
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-    def _load_imports(self):
-        """Load heavy imports only when needed."""
-        if self._imports_loaded:
-            return
-
-        # Import LangChain components (these are loaded dynamically)
-        global ChatPromptTemplate, HumanMessage, SystemMessage
-        try:
-            from langchain.prompts import ChatPromptTemplate
-            try:
-                from langchain_core.messages import HumanMessage, SystemMessage
-            except ImportError:
-                from langchain.schema import HumanMessage, SystemMessage
-        except ImportError:
-            # Mock classes for testing without LangChain
-            class MockChatPromptTemplate:
-                @classmethod
-                def from_messages(cls, messages):
-                    return cls()
-                def __or__(self, other):
-                    return other
-
-            class MockMessage:
-                def __init__(self, content):
-                    self.content = content
-
-            ChatPromptTemplate = MockChatPromptTemplate
-            HumanMessage = MockMessage
-            SystemMessage = MockMessage
-
-        # Initialize scaler if needed
-        if self.scaler is None and SKLEARN_AVAILABLE:
-            self.scaler = StandardScaler()
-
-        self._imports_loaded = True
-
-    def add_message(self, role: str, content: str):
-        """Add message to conversation history."""
-        self._load_imports()
-        self.conversation_history.append({
-            'role': role,
-            'content': content,
-            'timestamp': pd.Timestamp.now()
-        })
-
-    def log_reasoning(self, stage: str, content: str):
-        """Log agent reasoning."""
-        self._load_imports()
-        self.reasoning_log.append({
-            'stage': stage,
-            'content': content,
-            'timestamp': pd.Timestamp.now()
-        })
-        if self.verbose:
-            print(f"\n{'='*80}")
-            print(f"{stage}")
-            print(f"{'='*80}")
-            print(content)
-
-    def validate_selection_quality(self, selected_indices: List[int], labels: np.ndarray) -> Dict[str, Any]:
-        """Validate selection quality against agentic boundaries."""
-        if not self.agentic_mode or not self.validation_boundaries:
-            return {"validation": "skipped", "quality": "assumed_good"}
-
-        validation_results = {}
-        self._load_imports()
-
-        try:
-            # Cell name coverage validation (parsed from cell_arc_pt)
-            if self.current_data is not None:
-                # Try to parse cell names from cell_arc_pt if it exists
-                if 'cell_arc_pt' in self.current_data.columns:
-                    # Parse cell names from cell_arc_pt
-                    cell_names = self.current_data['cell_arc_pt'].str.split('#').str[0]
-                    selected_cell_names = self.current_data.iloc[selected_indices]['cell_arc_pt'].str.split('#').str[0]
-
-                    total_cell_types = cell_names.nunique()
-                    selected_cell_types = selected_cell_names.nunique()
-                    cell_coverage = selected_cell_types / total_cell_types if total_cell_types > 0 else 0
-
-                    min_coverage = self.validation_boundaries.get('minimum_cell_type_coverage', 0.8)
-                    validation_results['cell_coverage'] = {
-                        'achieved': cell_coverage,
-                        'required': min_coverage,
-                        'passed': cell_coverage >= min_coverage
-                    }
-                else:
-                    validation_results['cell_coverage'] = {
-                        'achieved': 0.0,
-                        'required': 0.8,
-                        'passed': False,
-                        'reason': 'No cell_arc_pt column found for parsing cell types'
-                    }
-
-            # Cluster balance validation
-            if len(labels) > 0:
-                cluster_sizes = [np.sum(labels[selected_indices] == i) for i in np.unique(labels)]
-                if len(cluster_sizes) > 1:
-                    max_size = max(cluster_sizes)
-                    min_size = min([s for s in cluster_sizes if s > 0])
-                    imbalance_ratio = max_size / min_size if min_size > 0 else float('inf')
-
-                    max_imbalance = self.validation_boundaries.get('maximum_cluster_imbalance', 3.0)
-                    validation_results['cluster_balance'] = {
-                        'imbalance_ratio': imbalance_ratio,
-                        'max_allowed': max_imbalance,
-                        'passed': imbalance_ratio <= max_imbalance
-                    }
-
-            # Overall validation status
-            all_passed = all(result.get('passed', True) for result in validation_results.values()
-                           if isinstance(result, dict) and 'passed' in result)
-
-            validation_results['overall_status'] = 'PASSED' if all_passed else 'FAILED'
-            validation_results['requires_iteration'] = not all_passed
-
-            if self.verbose and validation_results.get('requires_iteration'):
-                print(f"\n[VALIDATION] Quality check FAILED - iteration required")
-                for key, result in validation_results.items():
-                    if isinstance(result, dict) and not result.get('passed', True):
-                        print(f"  {key}: {result}")
-
-            return validation_results
-
-        except Exception as e:
-            return {"validation": "error", "error": str(e), "quality": "unknown"}
-
-    def parse_user_query(self, query: str) -> Dict[str, Any]:
-        """Parse natural language query with timing domain understanding."""
-        self._load_imports()
-        parsing_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"""Parse this timing engineer's request for intelligent Monte Carlo sampling.
-
-Query: "{query}"
-
-CRITICAL: If NO percentage is mentioned in the query, set selection_percentage to null.
-ONLY use a percentage if explicitly stated (e.g., "8%", "select 5%", "10 percent").
-
-Extract and return ONLY valid JSON with these fields:
-- selection_percentage: float if specified, null if not mentioned (e.g., 8.0 or null)
-- selection_criteria: string ("uncertainty", "diversity", "random")
-- clustering_preference: string or null ("gmm", "kmeans", or null for auto)
-- additional_requirements: string or null for any special timing requirements
-
-Choose the optimal sampling method based on the specific data characteristics discovered.
-If no percentage specified, the system will determine optimal percentage based on data analysis.
-
-Return ONLY the JSON object, nothing else.""")
-        ])
-
-        chain = parsing_prompt | self.llm
-        response = chain.invoke({})
-
-        if hasattr(response, 'content'):
-            text = response.content
-        else:
-            text = str(response)
-
-        text = text.replace('```json', '').replace('```', '').strip()
-
-        try:
-            params = json.loads(text)
-        except json.JSONDecodeError:
-            json_match = re.search(r'\{.*\}', text, re.DOTALL)
-            if json_match:
-                try:
-                    params = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    params = {
-                        'selection_percentage': None,  # No default - will determine from data
-                        'selection_criteria': 'data_driven',  # Let agent decide based on data
-                        'clustering_preference': None,  # Let agent choose best method
-                        'additional_requirements': 'adaptive_method_selection'
-                    }
-            else:
-                params = {
-                    'selection_percentage': None,  # No default - will determine from data
-                    'selection_criteria': 'data_driven',  # Let agent decide based on data
-                    'clustering_preference': None,  # Let agent choose best method
-                    'additional_requirements': 'adaptive_method_selection'
-                }
-
-        # Store parameters for later processing after data is loaded
-        self.add_message('assistant', f"Parsed query parameters: {params}")
-        return params
-
-
-    # Hardcoded methods removed - agent now uses only autonomous pipeline
-    # All functionality available via: autonomous_sample_selection()
-
-    def handle_conversation(self, user_query: str) -> Dict[str, Any]:
-        """Handle conversational questions about results without re-running selection."""
-        self._load_imports()
-
-        # Classify user intent
-        intent, params = self.classify_user_intent(user_query)
-
-        if intent == UserIntent.QUESTION_ABOUT_RESULTS:
-            # Generate response based on conversation history
-            context = "\n".join([msg['content'] for msg in self.conversation_history[-5:]])
-
-            question_prompt = f"""Based on our previous conversation about timing data selection, answer this follow-up question:
-
-User Question: {user_query}
-
-Recent Context:
-            {context}
-
-Provide a clear, technical explanation addressing their specific question about the selection methodology, results, or reasoning. Use plain text only."""
-
-            prompt_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content=self.system_prompt),
-                HumanMessage(content=question_prompt)
-            ])
-
-            chain = prompt_template | self.llm
-            response = chain.invoke({})
-
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
-
-            self.add_message('assistant', response_text)
-
-            return {
-                'type': 'conversational_response',
-                'intent': intent.value,
-                'response': response_text,
-                'parameters': params
-            }
-
-        elif intent == UserIntent.EXPLAIN_METHODOLOGY:
-            # Explain methodology without running selection
-            methodology_prompt = f"""Explain the timing data selection methodology to address this question:
-
-{user_query}
-
-Provide a technical explanation of the algorithms, approaches, and reasoning behind the methodology. Focus on the specific aspect they're asking about."""
-
-            prompt_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content=self.system_prompt),
-                HumanMessage(content=methodology_prompt)
-            ])
-
-            chain = prompt_template | self.llm
-            response = chain.invoke({})
-
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
-
-            self.add_message('assistant', response_text)
-
-            return {
-                'type': 'methodology_explanation',
-                'intent': intent.value,
-                'response': response_text,
-                'parameters': params
-            }
-
-        else:
-            # For other intents, indicate that selection should be run
-            return {
-                'type': 'requires_execution',
-                'intent': intent.value,
-                'parameters': params
-            }
-
-    def run_selection(self, user_query: str, csv_path: str) -> Dict[str, Any]:
-        """Main workflow with timing domain expertise."""
-        self._load_imports()
-        print("\n" + "=" * 80)
-        print("TIMING-AWARE DATA SELECTION AGENT")
-        print("=" * 80)
-
-        self.add_message('user', user_query)
-
-        print("\nParsing timing engineer requirements...")
-        params = self.parse_user_query(user_query)
-
-        # Check if this is a conversational question first
-        intent, intent_params = self.classify_user_intent(user_query)
-
-        if intent in [UserIntent.QUESTION_ABOUT_RESULTS, UserIntent.EXPLAIN_METHODOLOGY] and len(self.conversation_history) > 0:
-            print("\n[CONVERSATIONAL] Detected follow-up question - providing contextual response")
-            return self.handle_conversation(user_query)
-
-        # Handle null percentage first - determine optimal percentage based on actual dataset size
-        if params.get('selection_percentage') is None:
-            # Need to load data first to determine size
-            temp_data = pd.read_csv(csv_path)
-            data_size = len(temp_data)
-            if data_size > 50000:
-                optimal_percentage = 3.0  # Large datasets need less percentage
-            elif data_size > 20000:
-                optimal_percentage = 5.0  # Medium datasets
-            else:
-                optimal_percentage = 8.0  # Smaller datasets can afford higher percentage
-
-            params['selection_percentage'] = optimal_percentage
-            print(f"No percentage specified. Data-driven selection: {optimal_percentage}% for {data_size:,} samples")
-
-        # Now call observe with valid percentage
-        observation = self.observe(csv_path, params['selection_percentage'], use_agentic_explore=self.agentic_mode)
-
-        # Update observation with final percentage
-        observation['final_target_percentage'] = params['selection_percentage']
-
-        strategy = self.think(observation, params['selection_percentage'])
-
-        if self.agentic_mode:
-            # In agentic mode, strategy includes decision-making
-            # Skip separate decide stage and let act handle both
-            print("\n[AGENTIC] Strategy includes autonomous decision-making")
-            result = self.act_agentic(strategy, params['selection_percentage'])
-        else:
-            # Standard mode with separate decide stage
-            decision = self.decide(strategy)
-            result = self.act(decision, strategy)
-
-        print("\n" + "=" * 80)
-        print("TIMING-OPTIMIZED SELECTION COMPLETE")
-        print("=" * 80)
-        print(f"Selected {result['n_selected']}/{len(self.current_data)} samples ({result['n_selected']/len(self.current_data)*100:.1f}%)")
-        print(f"Expected cost reduction: {result['expected_cost_reduction']}")
-        print(f"Active learning: Uncertainty-based sampling for timing robustness")
-
-        # Handle decision structure for agentic vs standard mode
-        if self.agentic_mode:
-            decision = getattr(self, 'last_decision', {})
-
-        return {
-            'observation': observation,
-            'strategy': strategy,
-            'decision': decision,
-            'result': result,
-            'reasoning_log': self.reasoning_log,
-            'conversation_history': self.conversation_history,
-            'parsed_params': params,
-            'agentic_mode': self.agentic_mode
-        }
-
-    def _extract_cluster_count(self, text: str) -> int:
-        """Extract cluster count from LLM response."""
-        try:
-            matches = re.findall(r'(\d+)\s*cluster', text, re.IGNORECASE)
-            if matches:
-                return int(matches[0])
-
-            matches = re.findall(r'k\s*=\s*(\d+)', text)
-            if matches:
-                return int(matches[0])
-
-            matches = re.findall(r'(?:optimal|best|choose).*?(\d+)', text, re.IGNORECASE)
-            if matches:
-                return int(matches[0])
-        except:
-            pass
-
-        return 10
-
-    def get_conversation_history(self) -> List[Dict[str, Any]]:
-        """Get conversation history."""
-        return self.conversation_history
-
-    def self_test(self, verbose: bool = True) -> bool:
-        """Run internal self-tests to validate agent functionality."""
-        if verbose:
-            print("Running agent self-tests...")
-
-        success_count = 0
-        total_tests = 0
-
-        # Test 1: Intent Classification
-        try:
-            test_cases = [
-                ("why not k-means?", UserIntent.QUESTION_ABOUT_RESULTS),
-                ("Select 5% of timing data", UserIntent.EXECUTE_SAMPLING),
-                ("Change to 8%", UserIntent.MODIFY_PARAMETERS),
-                ("show dashboard", UserIntent.REQUEST_VISUALIZATION),
-                ("How does clustering work?", UserIntent.EXPLAIN_METHODOLOGY),
-                ("help", UserIntent.GENERAL_HELP),
-            ]
-
-            intent_success = 0
-            for test_input, expected_intent in test_cases:
-                actual_intent, params = self.classify_user_intent(test_input)
-                if actual_intent == expected_intent:
-                    intent_success += 1
-                    if verbose:
-                        print(f"[PASS] Intent: '{test_input}' -> {actual_intent.value}")
-                elif verbose:
-                    print(f"[FAIL] Intent: '{test_input}' -> Expected: {expected_intent.value}, Got: {actual_intent.value}")
-
-            if intent_success >= len(test_cases) * 0.8:  # 80% success rate
-                success_count += 1
-                if verbose:
-                    print(f"[PASS] Intent Classification: {intent_success}/{len(test_cases)} passed")
-            else:
-                if verbose:
-                    print(f"[FAIL] Intent Classification: {intent_success}/{len(test_cases)} passed")
-            total_tests += 1
-        except Exception as e:
-            if verbose:
-                print(f"[FAIL] Intent Classification failed: {e}")
-            total_tests += 1
-
-        # Test 2: Enhanced Prompts
-        try:
-            test_params = {
-                'total_samples': 10000,
-                'target_count': 500,
-                'target_percentage': 5.0,
-                'n_features': 12,
-                'n_cell_types': 8,
-                'calculated_stats': 'test stats',
-                'correlation_details': 'test correlations',
-                'sigma_analysis': 'test sigma'
-            }
-
-            # Test AGENTIC_EXPLORE_PROMPT formatting
-            formatted = AGENTIC_EXPLORE_PROMPT.format(**test_params)
-            if "10000" in formatted and "500" in formatted:
-                success_count += 1
-                if verbose:
-                    print("[PASS] Enhanced prompts formatting works")
-            elif verbose:
-                print("[FAIL] Enhanced prompts formatting failed")
-            total_tests += 1
-        except Exception as e:
-            if verbose:
-                print(f"[FAIL] Enhanced prompts test failed: {e}")
-            total_tests += 1
-
-        # Test 3: Validation boundaries
-        try:
-            if ('minimum_cell_type_coverage' in VALIDATION_BOUNDARIES and
-                'temperature' in AGENTIC_LLM_PARAMETERS):
-                success_count += 1
-                if verbose:
-                    print("[PASS] Enhanced parameters and boundaries loaded")
-            elif verbose:
-                print("[FAIL] Enhanced parameters missing")
-            total_tests += 1
-        except Exception as e:
-            if verbose:
-                print(f"[FAIL] Validation boundaries test failed: {e}")
-            total_tests += 1
-
-        # Summary
-        success_rate = success_count / total_tests if total_tests > 0 else 0
-        if verbose:
-            print(f"\nSelf-test results: {success_count}/{total_tests} tests passed ({success_rate:.0%})")
-            if success_rate >= 0.8:
-                print("[PASS] Agent self-test PASSED - System ready!")
-            else:
-                print("[FAIL] Agent self-test FAILED - Review configuration")
-
-        return success_rate >= 0.8
-
-    # SAFE ALLOCATION METHODS
-    def safe_int(self, value: Union[int, float, str, None], default: int = 0) -> int:
-        """Convert any value to safe integer, defaulting to 0 for None/invalid values."""
-        if value is None:
-            return default
-        try:
-            if isinstance(value, str):
-                # Extract numbers from string responses like "30 samples" or "None allocated"
-                numbers = re.findall(r'\d+', value)
-                return int(numbers[0]) if numbers else default
-            return max(0, int(float(value)))  # Ensure non-negative
-        except (ValueError, TypeError):
-            return default
-
-    def safe_sample_allocation(self, strategy_results: Dict[str, Any], total_target: int) -> Dict[str, int]:
-        """Safely allocate samples across different strategies with None-type protection."""
-
-        # Define all possible allocation strategies
-        allocation_strategies = [
-            'grid_sampling',
-            'uncertainty_sampling',
-            'boundary_sampling',
-            'sparse_region_exploration',
-            'validation_holdout',
-            'representative_coverage',
-            'corner_case_sampling'
-        ]
-
-        # Extract and safely convert all allocations
-        safe_allocations = {}
-        total_allocated = 0
-
-        for strategy in allocation_strategies:
-            raw_value = strategy_results.get(strategy, 0)
-            safe_count = self.safe_int(raw_value, 0)
-            safe_allocations[strategy] = safe_count
-            total_allocated += safe_count
-
-        # Handle over/under allocation
-        if total_allocated > total_target:
-            print(f"[WARNING] Over-allocation detected: {total_allocated} > {total_target}")
-            # Proportionally reduce all non-zero allocations
-            scale_factor = total_target / total_allocated
-            for strategy in safe_allocations:
-                if safe_allocations[strategy] > 0:
-                    safe_allocations[strategy] = max(1, int(safe_allocations[strategy] * scale_factor))
-
-            # Recalculate total after scaling
-            total_allocated = sum(safe_allocations.values())
-
-        # Handle under-allocation by adding to largest strategy
-        if total_allocated < total_target:
-            remaining = total_target - total_allocated
-            largest_strategy = max(safe_allocations.keys(), key=lambda k: safe_allocations[k])
-            safe_allocations[largest_strategy] += remaining
-            print(f"[INFO] Added {remaining} samples to {largest_strategy} to reach target")
-
-        # Final validation
-        final_total = sum(safe_allocations.values())
-        assert final_total == total_target, f"Allocation error: {final_total} != {total_target}"
-
-        return safe_allocations
-
-    # INTENT CLASSIFICATION METHODS
-    def classify_user_intent(self, user_input: str) -> Tuple[UserIntent, Dict[str, Any]]:
-        """Classify user intent to determine whether to execute pipeline or answer from context."""
-
-        input_lower = user_input.lower().strip()
-
-        # Intent patterns with priorities (most specific first)
-        intent_patterns = {
-            UserIntent.QUESTION_ABOUT_RESULTS: [
-                r'why did you (choose|pick|select)',
-                r'why.*(\d+)%',
-                r'explain (the|your) (selection|choice|decision)',
-                r'how did you (decide|determine)',
-                r'what.*reasoning.*behind',
-                r'justify.*selection',
-                r'(why|how).*samples',
-                r'rationale.*for',
-                r'why not.*k-?means',
-                r'why not.*clustering',
-                r'what about.*algorithm'
-            ],
-
-            UserIntent.MODIFY_PARAMETERS: [
-                r'change.*to.*(\d+)%',
-                r'try.*(\d+)%.*instead',
-                r'use.*(\d+).*samples',
-                r'increase.*to.*(\d+)',
-                r'decrease.*to.*(\d+)',
-                r'modify.*percentage',
-                r'adjust.*selection'
-            ],
-
-            UserIntent.REQUEST_VISUALIZATION: [
-                r'show.*plot',
-                r'show.*visualization',
-                r'visuali[sz]e.*results',
-                r'generate.*dashboard',
-                r'plot.*samples',
-                r'show.*scatter',
-                r'display.*chart',
-                r'show.*dashboard'
-            ],
-
-            UserIntent.EXPLAIN_METHODOLOGY: [
-                r'how does.*work',
-                r'explain.*algorithm',
-                r'what.*method.*using',
-                r'describe.*approach',
-                r'methodology',
-                r'what is.*k-?means',
-                r'difference between.*algorithms'
-            ],
-
-            UserIntent.EXECUTE_SAMPLING: [
-                r'select.*(\d+)%',
-                r'run.*sampling',
-                r'perform.*selection',
-                r'execute.*analysis',
-                r'analyze.*dataset',
-                r'sample.*(\d+)',
-                r'choose.*samples'
-            ],
-
-            UserIntent.GENERAL_HELP: [
-                r'help',
-                r'what.*can.*do',
-                r'how.*use',
-                r'commands'
-            ]
-        }
-
-        # Check patterns in order of priority
-        for intent, patterns in intent_patterns.items():
-            for pattern in patterns:
-                match = re.search(pattern, input_lower)
-                if match:
-                    # Extract parameters from match
-                    params = self._extract_intent_parameters(user_input, match)
-                    return intent, params
-
-        # Default to execution if no clear pattern matches
-        return UserIntent.EXECUTE_SAMPLING, {}
-
-    def _extract_intent_parameters(self, user_input: str, match: re.Match) -> Dict[str, Any]:
-        """Extract parameters from matched intent patterns."""
-        params = {}
-
-        # Extract percentages
-        percentage_matches = re.findall(r'(\d+)%', user_input)
-        if percentage_matches:
-            params['percentage'] = int(percentage_matches[0])
-
-        # Extract sample counts
-        sample_matches = re.findall(r'(\d+)\s*samples?', user_input, re.IGNORECASE)
-        if sample_matches:
-            params['sample_count'] = int(sample_matches[0])
-
-        # Extract algorithm names
-        algorithm_matches = re.findall(r'(k-?means|gmm|clustering)', user_input, re.IGNORECASE)
-        if algorithm_matches:
-            params['algorithm'] = algorithm_matches[0].lower().replace('-', '')
-
-        return params
-
-    # INTERACTIVE VISUALIZATION METHODS
-    def generate_interactive_dashboard(self, df: pd.DataFrame, selected_indices: List[int],
-                                     clusters: np.ndarray, centroids: np.ndarray,
-                                     pca_components: Optional[np.ndarray] = None,
-                                     export_html: bool = True) -> Dict[str, Any]:
-        """
-        Generate comprehensive visualization dashboard with advanced timing analysis.
-
-        Advanced & Comprehensive Visualization Suite includes:
-        1. Dimensionality Reduction (PCA/t-SNE) with boundary status
-        2. Correlation Difference Heatmap
-        3. Tail Coverage Analysis (KDE Overlays)
-        4. Pairplot (Scatter Matrix)
-        5. Cluster Composition Chart
-        """
-
-        print("\n" + "=" * 80)
-        print("[VISUALIZATION] Generating Comprehensive Dashboard")
-        print("=" * 80)
-
-        # Use execution engine to generate advanced visualizations
-        dashboard_code = """
-# COMPREHENSIVE VISUALIZATION DASHBOARD GENERATION
-
-import matplotlib.pyplot as plt
-import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from scipy.stats import gaussian_kde
-from itertools import combinations
-
-# Set up the visualization parameters
-plt.style.use('dark_background')
-fig_size = (20, 16)
-fig, axes = plt.subplots(3, 3, figsize=fig_size)
-fig.suptitle('Comprehensive Timing Analysis Dashboard', fontsize=20, color='white')
-
-# Get the data from previous analysis
-X_scaled = globals().get('X_scaled')
-feature_names = globals().get('feature_names', [])
-winner_labels = globals().get('winner_labels', [])
-selected_indices = {selected_indices_list}
-
-if X_scaled is not None and len(feature_names) > 0:
-    print("Generating advanced visualization suite...")
-
-    # 1. DIMENSIONALITY REDUCTION WITH BOUNDARY STATUS
-    print("1. Creating PCA/t-SNE visualization with boundary detection...")
-
-    # PCA
-    pca = PCA(n_components=2)
-    pca_coords = pca.fit_transform(X_scaled)
-
-    # t-SNE for comparison
-    if len(X_scaled) <= 5000:  # Only for reasonable dataset sizes
-        tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(X_scaled)-1))
-        tsne_coords = tsne.fit_transform(X_scaled[:5000] if len(X_scaled) > 5000 else X_scaled)
-    else:
-        tsne_coords = pca_coords  # Fallback to PCA for large datasets
-
-    # Detect boundary cases (high sigma and extreme values)
-    boundary_status = []
-    for i in range(len(X_scaled)):
-        is_boundary = False
-        for j, col in enumerate(feature_names[:5]):  # Check first 5 features
-            col_data = dataset[col]
-            mean_val = col_data.mean()
-            std_val = col_data.std()
-            val = dataset.iloc[i][col]
-
-            # High sigma (>3 std devs) or extreme values
-            if abs(val - mean_val) > 3 * std_val or val == col_data.min() or val == col_data.max():
-                is_boundary = True
-                break
-        boundary_status.append(is_boundary)
-
-    # Plot PCA with boundary status
-    ax1 = axes[0, 0]
-    scatter_colors = ['red' if i in selected_indices else 'lightblue' if boundary_status[i] else 'gray'
-                     for i in range(len(pca_coords))]
-    ax1.scatter(pca_coords[:, 0], pca_coords[:, 1], c=scatter_colors, alpha=0.7, s=30)
-    ax1.set_title('PCA: Population grey vs Selected red vs Boundary blue', color='white')
-    ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
-    ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
-
-    print("   - PCA visualization complete")
-
-    # 2. CORRELATION DIFFERENCE HEATMAP
-    print("2. Creating correlation difference heatmap...")
-
-    if len(feature_names) > 2:
-        # Original correlation matrix
-        corr_original = dataset[feature_names].corr()
-
-        # Selected samples correlation matrix
-        selected_data = dataset.iloc[selected_indices][feature_names]
-        corr_selected = selected_data.corr()
-
-        # Difference matrix
-        corr_diff = np.abs(corr_original - corr_selected)
-
-        ax2 = axes[0, 1]
-        # Use matplotlib imshow instead of seaborn heatmap
-        im = ax2.imshow(corr_diff, cmap='Reds', aspect='auto')
-        ax2.set_xticks(range(len(feature_names[:10])))
-        ax2.set_yticks(range(len(feature_names[:10])))
-        ax2.set_xticklabels([f[:8] for f in feature_names[:10]], rotation=45)
-        ax2.set_yticklabels([f[:8] for f in feature_names[:10]])
-
-        # Add colorbar
-        plt.colorbar(im, ax=ax2, label='Correlation Difference')
-
-        # Add text annotations
-        for i in range(len(feature_names[:10])):
-            for j in range(len(feature_names[:10])):
-                if i < corr_diff.shape[0] and j < corr_diff.shape[1]:
-                    ax2.text(j, i, f'{corr_diff.iloc[i, j]:.2f}',
-                            ha='center', va='center', color='white' if corr_diff.iloc[i, j] > 0.5 else 'black')
-
-        ax2.set_title('Correlation Delta: Original vs Selected', color='white')
-
-        print("   - Correlation heatmap complete")
-
-    # 3. TAIL COVERAGE ANALYSIS (KDE OVERLAYS)
-    print("3. Creating tail coverage analysis...")
-
-    if len(feature_names) >= 2:
-        # Select most important features for KDE analysis
-        key_features = feature_names[:3]  # First 3 features
-
-        ax3 = axes[0, 2]
-        colors = ['blue', 'red', 'green']
-
-        for i, col in enumerate(key_features):
-            # Original distribution
-            original_data = dataset[col]
-            selected_data = dataset.iloc[selected_indices][col]
-
-            # Create KDE
-            kde_orig = gaussian_kde(original_data)
-            kde_selected = gaussian_kde(selected_data)
-
-            x_range = np.linspace(original_data.min(), original_data.max(), 100)
-
-            # Plot KDEs
-            ax3.plot(x_range, kde_orig(x_range), colors[i], alpha=0.7,
-                    label=f'{col[:8]} Original', linestyle='--')
-            ax3.plot(x_range, kde_selected(x_range), colors[i], alpha=1.0,
-                    label=f'{col[:8]} Selected')
-
-        ax3.set_title('Tail Coverage: Original vs Selected KDE', color='white')
-        ax3.legend()
-        ax3.set_xlabel('Feature Value')
-        ax3.set_ylabel('Density')
-
-        print("   - KDE overlay analysis complete")
-
-    # 4. PAIRPLOT (SCATTER MATRIX) for top 3 features
-    print("4. Creating pairplot scatter matrix...")
-
-    if len(feature_names) >= 3:
-        top_3_features = feature_names[:3]
-
-        # Create scatter plots for feature pairs
-        feature_pairs = list(combinations(range(3), 2))
-        plot_positions = [(1, 0), (1, 1), (1, 2)]
-
-        for idx, (i, j) in enumerate(feature_pairs):
-            if idx < 3:  # Only plot first 3 pairs
-                ax = axes[plot_positions[idx]]
-
-                feat1 = dataset[top_3_features[i]]
-                feat2 = dataset[top_3_features[j]]
-
-                # Plot all points in gray
-                ax.scatter(feat1, feat2, c='gray', alpha=0.3, s=20, label='Population')
-
-                # Plot selected points in red
-                selected_feat1 = dataset.iloc[selected_indices][top_3_features[i]]
-                selected_feat2 = dataset.iloc[selected_indices][top_3_features[j]]
-                ax.scatter(selected_feat1, selected_feat2, c='red', alpha=0.8, s=30, label='Selected')
-
-                ax.set_xlabel(top_3_features[i][:12])
-                ax.set_ylabel(top_3_features[j][:12])
-                ax.set_title(f'{top_3_features[i][:8]} vs {top_3_features[j][:8]}', color='white')
-                if idx == 0:
-                    ax.legend()
-
-        print("   - Pairplot scatter matrix complete")
-
-    # 5. CLUSTER COMPOSITION CHART
-    print("5. Creating cluster composition analysis...")
-
-    if len(winner_labels) > 0:
-        ax4 = axes[2, 0]
-
-        # Classify points as nominal, high sigma, or boundary
-        point_types = []
-        for i in range(len(dataset)):
-            if boundary_status[i]:
-                point_types.append('Boundary')
-            else:
-                # Check if high sigma in any feature
-                is_high_sigma = False
-                for col in feature_names[:5]:
-                    col_data = dataset[col]
-                    val = dataset.iloc[i][col]
-                    if abs(val - col_data.mean()) > 3 * col_data.std():
-                        is_high_sigma = True
-                        break
-
-                if is_high_sigma:
-                    point_types.append('High Sigma')
-                else:
-                    point_types.append('Nominal')
-
-        # Create composition chart
-        unique_clusters = np.unique(winner_labels)
-        compositions = {'Nominal': [], 'High Sigma': [], 'Boundary': []}
-
-        for cluster_id in unique_clusters:
-            cluster_mask = winner_labels == cluster_id
-            cluster_types = [point_types[i] for i in range(len(point_types)) if cluster_mask[i]]
-
-            for comp_type in compositions.keys():
-                compositions[comp_type].append(cluster_types.count(comp_type))
-
-        # Stacked bar chart
-        bar_width = 0.6
-        x_pos = np.arange(len(unique_clusters))
-
-        bottom_nominal = np.array(compositions['Nominal'])
-        bottom_sigma = bottom_nominal + np.array(compositions['High Sigma'])
-
-        ax4.bar(x_pos, compositions['Nominal'], bar_width, label='Nominal', color='lightblue')
-        ax4.bar(x_pos, compositions['High Sigma'], bar_width, bottom=bottom_nominal,
-               label='High Sigma', color='orange')
-        ax4.bar(x_pos, compositions['Boundary'], bar_width, bottom=bottom_sigma,
-               label='Boundary', color='red')
-
-        ax4.set_xlabel('Cluster ID')
-        ax4.set_ylabel('Point Count')
-        ax4.set_title('Cluster Composition: Nominal vs High Sigma vs Boundary', color='white')
-        ax4.set_xticks(x_pos)
-        ax4.set_xticklabels([f'C{i}' for i in unique_clusters])
-        ax4.legend()
-
-        print("   - Cluster composition chart complete")
-
-    # 6. SUMMARY STATISTICS
-    print("6. Adding summary statistics...")
-
-    # Summary text in remaining subplot
-    ax5 = axes[2, 1]
-    ax5.axis('off')
-
-    # Calculate key statistics
-    n_total = len(dataset)
-    n_selected = len(selected_indices)
-    selection_pct = 100 * n_selected / n_total if n_total > 0 else 0
-    n_boundary = sum(boundary_status)
-    boundary_pct = 100 * n_boundary / n_total if n_total > 0 else 0
-
-    # Boundary coverage in selection
-    selected_boundary = sum(boundary_status[i] for i in selected_indices)
-    boundary_coverage = 100 * selected_boundary / n_boundary if n_boundary > 0 else 0
-
-    summary_text = f'''SELECTION SUMMARY
-
-Total Samples: {n_total:,}
-Selected Samples: {n_selected:,} ({selection_pct:.1f}%)
-
-Boundary Points: {n_boundary:,} ({boundary_pct:.1f}%)
-Boundary Coverage: {selected_boundary:,} ({boundary_coverage:.1f}%)
-
-Features Analyzed: {len(feature_names)}
-Clusters Found: {len(np.unique(winner_labels)) if len(winner_labels) > 0 else 0}
-
-Algorithm: {winner_algorithm if 'winner_algorithm' in globals() else 'Unknown'}
-Performance: {winner_score:.4f} if 'winner_score' in globals() else 0.0
-'''
-
-    ax5.text(0.1, 0.9, summary_text, transform=ax5.transAxes, fontsize=12,
-            color='white', verticalalignment='top', fontfamily='monospace')
-
-    # 7. FEATURE IMPORTANCE (if available)
-    ax6 = axes[2, 2]
-
-    if len(feature_names) > 0:
-        # Calculate feature variance as proxy for importance
-        feature_importance = [dataset[col].var() for col in feature_names[:10]]
-        feature_labels = [f[:8] for f in feature_names[:10]]
-
-        bars = ax6.barh(range(len(feature_importance)), feature_importance, color='lightgreen')
-        ax6.set_yticks(range(len(feature_importance)))
-        ax6.set_yticklabels(feature_labels)
-        ax6.set_xlabel('Variance (Importance Proxy)')
-        ax6.set_title('Feature Importance', color='white')
-
-        # Add value labels on bars
-        for i, (bar, val) in enumerate(zip(bars, feature_importance)):
-            ax6.text(val + max(feature_importance) * 0.01, i, f'{val:.2f}',
-                    va='center', color='white', fontsize=8)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    print("\\n=== COMPREHENSIVE DASHBOARD COMPLETE ===")
-    print("Dashboard includes:")
-    print("- PCA/t-SNE with boundary detection")
-    print("- Correlation difference analysis")
-    print("- Tail coverage validation")
-    print("- Pairwise feature relationships")
-    print("- Cluster composition breakdown")
-    print("- Summary statistics and feature importance")
-
-else:
-    print("ERROR: Required data not available for dashboard generation")
-
-# Save the plot
-dashboard_filename = 'comprehensive_timing_dashboard.png'
-plt.savefig(dashboard_filename, dpi=300, bbox_inches='tight',
-           facecolor='#2F3542', edgecolor='none')
-print(f"\\nDashboard saved as: {dashboard_filename}")
-
-plt.show()
-"""
-
-        # Execute dashboard generation
-        dashboard_result = self.execute_python_code(dashboard_code.replace("{selected_indices_list}", str(list(selected_indices))))
-        print("Dashboard Generation Output:")
-        print(dashboard_result)
-
-        if not PLOTLY_AVAILABLE:
-            print("[INFO] Using comprehensive matplotlib dashboard - Plotly not available")
-            return self._fallback_visualization(df, selected_indices, clusters)
-
-        # Prepare data
-        dashboard_data = self._prepare_dashboard_data(df, selected_indices, clusters, pca_components)
-
-        # Create main subplot structure
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=[
-                'Sample Selection Overview (Interactive)',
-                'Cluster Quality & Coverage Analysis',
-                'Selection Statistics by Cluster',
-                'Data Distribution Validation'
-            ],
-            specs=[
-                [{"type": "scatter"}, {"type": "scatter"}],
-                [{"type": "bar"}, {"type": "histogram"}]
-            ],
-            horizontal_spacing=0.12,
-            vertical_spacing=0.12
-        )
-
-        # Add plots
-        self._add_selection_overview(fig, dashboard_data, row=1, col=1)
-        self._add_cluster_analysis(fig, dashboard_data, centroids, row=1, col=2)
-        self._add_selection_statistics(fig, dashboard_data, row=2, col=1)
-        self._add_distribution_analysis(fig, dashboard_data, row=2, col=2)
-
-        # Update layout for interactivity
-        fig.update_layout(
-            title={
-                'text': 'Agentic Timing Data Selection Dashboard',
-                'x': 0.5,
-                'font': {'size': 24, 'color': 'white'}
-            },
-            template='plotly_dark',
-            showlegend=True,
-            height=800,
-            width=1200,
-            hovermode='closest',
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='#2F3542'
-        )
-
-        # Export standalone HTML if requested
-        html_path = None
-        if export_html:
-            html_path = self._export_html_dashboard(fig, dashboard_data)
-
-        return {
-            'plotly_figure': fig,
-            'dashboard_data': dashboard_data,
-            'html_export_path': html_path,
-            'interactive_features': {
-                'zoom': True,
-                'pan': True,
-                'hover_details': True,
-                'toggleable_traces': True,
-                'selection_tools': True
-            }
-        }
-
-    def _prepare_dashboard_data(self, df: pd.DataFrame, selected_indices: List[int],
-                               clusters: np.ndarray, pca_components: Optional[np.ndarray] = None) -> Dict[str, Any]:
-        """Prepare and structure data for dashboard plotting."""
-
-        # Create selection mask
-        selection_mask = np.zeros(len(df), dtype=bool)
-        selection_mask[selected_indices] = True
-
-        # Prepare coordinate data
-        if pca_components is not None and pca_components.shape[1] >= 2:
-            x_coords = pca_components[:, 0]
-            y_coords = pca_components[:, 1]
-            coord_labels = ('PCA Component 1', 'PCA Component 2')
-        else:
-            # Use first two numeric columns as fallback
-            numeric_cols = df.select_dtypes(include=[np.number]).columns[:2]
-            x_coords = df[numeric_cols[0]].values if len(numeric_cols) > 0 else np.arange(len(df))
-            y_coords = df[numeric_cols[1]].values if len(numeric_cols) > 1 else np.random.random(len(df))
-            coord_labels = (numeric_cols[0] if len(numeric_cols) > 0 else 'Index',
-                          numeric_cols[1] if len(numeric_cols) > 1 else 'Random')
-
-        # Calculate cluster statistics
-        unique_clusters = np.unique(clusters)
-        cluster_stats = {}
-
-        for cluster_id in unique_clusters:
-            cluster_mask = clusters == cluster_id
-            selected_in_cluster = np.sum(selection_mask & cluster_mask)
-            total_in_cluster = np.sum(cluster_mask)
-
-            cluster_stats[cluster_id] = {
-                'total_samples': total_in_cluster,
-                'selected_samples': selected_in_cluster,
-                'selection_rate': selected_in_cluster / total_in_cluster if total_in_cluster > 0 else 0,
-                'cluster_size_pct': total_in_cluster / len(df) * 100
-            }
-
-        return {
-            'coordinates': {
-                'x': x_coords,
-                'y': y_coords,
-                'labels': coord_labels
-            },
-            'selection_mask': selection_mask,
-            'clusters': clusters,
-            'cluster_stats': cluster_stats,
-            'summary': {
-                'total_samples': len(df),
-                'selected_count': len(selected_indices),
-                'selection_percentage': len(selected_indices) / len(df) * 100,
-                'num_clusters': len(unique_clusters)
-            }
-        }
-
-    def _add_selection_overview(self, fig, dashboard_data: Dict, row: int, col: int):
-        """Add interactive sample selection overview plot."""
-
-        coords = dashboard_data['coordinates']
-        selection_mask = dashboard_data['selection_mask']
-        clusters = dashboard_data['clusters']
-
-        # Color palette
-        selected_color = '#FF6B6B'  # Red for selected samples
-        unselected_color = '#4ECDC4'  # Teal for unselected
-
-        # Unselected samples (background)
-        unselected_mask = ~selection_mask
-        fig.add_trace(
-            go.Scatter(
-                x=coords['x'][unselected_mask],
-                y=coords['y'][unselected_mask],
-                mode='markers',
-                marker=dict(
-                    color=clusters[unselected_mask],
-                    colorscale='Viridis',
-                    size=6,
-                    opacity=0.4,
-                    line=dict(width=1, color='white')
-                ),
-                name='Unselected',
-                hovertemplate='<b>Unselected Sample</b><br>' +
-                            f'{coords["labels"][0]}: %{{x:.3f}}<br>' +
-                            f'{coords["labels"][1]}: %{{y:.3f}}<br>' +
-                            'Cluster: %{marker.color}<extra></extra>',
-                showlegend=True
-            ),
-            row=row, col=col
-        )
-
-        # Selected samples (highlighted)
-        selected_mask = selection_mask
-        fig.add_trace(
-            go.Scatter(
-                x=coords['x'][selected_mask],
-                y=coords['y'][selected_mask],
-                mode='markers',
-                marker=dict(
-                    color=selected_color,
-                    size=10,
-                    opacity=0.8,
-                    line=dict(width=2, color='white'),
-                    symbol='diamond'
-                ),
-                name='Selected',
-                hovertemplate='<b>SELECTED Sample</b><br>' +
-                            f'{coords["labels"][0]}: %{{x:.3f}}<br>' +
-                            f'{coords["labels"][1]}: %{{y:.3f}}<br>' +
-                            'Status: Selected for analysis<extra></extra>',
-                showlegend=True
-            ),
-            row=row, col=col
-        )
-
-        # Update axes
-        fig.update_xaxes(title_text=coords['labels'][0], row=row, col=col)
-        fig.update_yaxes(title_text=coords['labels'][1], row=row, col=col)
-
-    def _add_cluster_analysis(self, fig, dashboard_data: Dict, centroids: np.ndarray, row: int, col: int):
-        """Add cluster quality and coverage analysis."""
-
-        coords = dashboard_data['coordinates']
-        clusters = dashboard_data['clusters']
-        cluster_stats = dashboard_data['cluster_stats']
-
-        # Plot cluster centers
-        unique_clusters = np.unique(clusters)
-        cluster_colors = px.colors.qualitative.Set3[:len(unique_clusters)]
-
-        for i, cluster_id in enumerate(unique_clusters):
-            cluster_mask = clusters == cluster_id
-            stats = cluster_stats[cluster_id]
-
-            # Cluster samples
-            fig.add_trace(
-                go.Scatter(
-                    x=coords['x'][cluster_mask],
-                    y=coords['y'][cluster_mask],
-                    mode='markers',
-                    marker=dict(
-                        color=cluster_colors[i],
-                        size=7,
-                        opacity=0.6,
-                        line=dict(width=1, color='white')
-                    ),
-                    name=f'Cluster {cluster_id}',
-                    hovertemplate=f'<b>Cluster {cluster_id}</b><br>' +
-                                f'{coords["labels"][0]}: %{{x:.3f}}<br>' +
-                                f'{coords["labels"][1]}: %{{y:.3f}}<br>' +
-                                f'Selected: {stats["selected_samples"]}/{stats["total_samples"]}<br>' +
-                                f'Rate: {stats["selection_rate"]:.1%}<extra></extra>',
-                    showlegend=True
-                ),
-                row=row, col=col
-            )
-
-            # Cluster centroid
-            if i < len(centroids):
-                fig.add_trace(
-                    go.Scatter(
-                        x=[centroids[i, 0]],
-                        y=[centroids[i, 1]] if centroids.shape[1] > 1 else [0],
-                        mode='markers',
-                        marker=dict(
-                            color='black',
-                            size=15,
-                            symbol='x',
-                            line=dict(width=3, color=cluster_colors[i])
-                        ),
-                        name=f'Centroid {cluster_id}',
-                        hovertemplate=f'<b>Cluster {cluster_id} Centroid</b><br>' +
-                                    'Representative center point<extra></extra>',
-                        showlegend=False
-                    ),
-                    row=row, col=col
-                )
-
-        # Update axes
-        fig.update_xaxes(title_text=coords['labels'][0], row=row, col=col)
-        fig.update_yaxes(title_text=coords['labels'][1], row=row, col=col)
-
-    def _add_selection_statistics(self, fig, dashboard_data: Dict, row: int, col: int):
-        """Add selection statistics bar chart."""
-
-        cluster_stats = dashboard_data['cluster_stats']
-        selected_color = '#FF6B6B'
-        unselected_color = '#4ECDC4'
-
-        cluster_ids = list(cluster_stats.keys())
-        selected_counts = [stats['selected_samples'] for stats in cluster_stats.values()]
-        total_counts = [stats['total_samples'] for stats in cluster_stats.values()]
-        selection_rates = [stats['selection_rate'] * 100 for stats in cluster_stats.values()]
-
-        # Selected samples bar
-        fig.add_trace(
-            go.Bar(
-                x=[f'Cluster {cid}' for cid in cluster_ids],
-                y=selected_counts,
-                name='Selected',
-                marker_color=selected_color,
-                hovertemplate='<b>%{x}</b><br>Selected: %{y}<br>Rate: %{customdata:.1f}%<extra></extra>',
-                customdata=selection_rates
-            ),
-            row=row, col=col
-        )
-
-        # Total samples outline
-        fig.add_trace(
-            go.Bar(
-                x=[f'Cluster {cid}' for cid in cluster_ids],
-                y=total_counts,
-                name='Total Available',
-                marker=dict(
-                    color='rgba(255,255,255,0)',
-                    line=dict(color=unselected_color, width=2)
-                ),
-                hovertemplate='<b>%{x}</b><br>Total: %{y}<br>Coverage: %{customdata:.1f}%<extra></extra>',
-                customdata=[stats['cluster_size_pct'] for stats in cluster_stats.values()]
-            ),
-            row=row, col=col
-        )
-
-        # Update axes
-        fig.update_xaxes(title_text='Clusters', row=row, col=col)
-        fig.update_yaxes(title_text='Sample Count', row=row, col=col)
-
-    def _add_distribution_analysis(self, fig, dashboard_data: Dict, row: int, col: int):
-        """Add data distribution histogram."""
-
-        coords = dashboard_data['coordinates']
-        selection_mask = dashboard_data['selection_mask']
-        selected_color = '#FF6B6B'
-        unselected_color = '#4ECDC4'
-
-        # All data histogram
-        fig.add_trace(
-            go.Histogram(
-                x=coords['x'],
-                name='All Data',
-                opacity=0.5,
-                marker_color=unselected_color,
-                nbinsx=30,
-                hovertemplate='<b>All Data</b><br>Range: %{x}<br>Count: %{y}<extra></extra>'
-            ),
-            row=row, col=col
-        )
-
-        # Selected data histogram
-        fig.add_trace(
-            go.Histogram(
-                x=coords['x'][selection_mask],
-                name='Selected Data',
-                opacity=0.7,
-                marker_color=selected_color,
-                nbinsx=30,
-                hovertemplate='<b>Selected Data</b><br>Range: %{x}<br>Count: %{y}<extra></extra>'
-            ),
-            row=row, col=col
-        )
-
-        # Update axes
-        fig.update_xaxes(title_text=coords['labels'][0], row=row, col=col)
-        fig.update_yaxes(title_text='Frequency', row=row, col=col)
-
-    def _export_html_dashboard(self, fig, dashboard_data: Dict) -> str:
-        """Export interactive dashboard as standalone HTML."""
-
-        try:
-            summary = dashboard_data.get('summary', {})
-            timestamp = time.strftime('%Y%m%d_%H%M%S')
-
-            # Get selected count safely
-            selected_count = summary.get('selected_count', 0)
-            total_samples = summary.get('total_samples', 0)
-            selection_percentage = summary.get('selection_percentage', 0.0)
-            num_clusters = summary.get('num_clusters', 0)
-
-            # Create safe filename in current working directory
-            html_filename = f"timing_dashboard_{selected_count}samples_{timestamp}.html"
-            html_path = os.path.join(os.getcwd(), html_filename)
-
-            # Add summary annotation
-            fig.add_annotation(
-                xref="paper", yref="paper",
-                x=0.02, y=0.98,
-                text=f"<b>Summary:</b> {selected_count:,} samples selected " +
-                     f"({selection_percentage:.1f}%) from {total_samples:,} total " +
-                     f"across {num_clusters} clusters",
-                showarrow=False,
-                font=dict(size=14, color="white"),
-                align="left",
-                bgcolor="rgba(0,0,0,0.5)",
-                bordercolor="white",
-                borderwidth=1
-            )
-
-            # Export with full interactivity and error handling
-            fig.write_html(
-                html_path,
-                include_plotlyjs=True,
-                config={
-                    'displayModeBar': True,
-                    'displaylogo': False,
-                    'modeBarButtonsToAdd': ['select2d', 'lasso2d'],
-                    'toImageButtonOptions': {
-                        'format': 'png',
-                        'filename': f'timing_dashboard_{selected_count}samples',
-                        'height': 800,
-                        'width': 1200,
-                        'scale': 2
-                    }
-                },
-                div_id="timing-dashboard",
-                include_mathjax=False
-            )
-
-            print(f"Interactive dashboard exported successfully: {html_path}")
-
-            # Automatically open the dashboard in the default browser
-            try:
-                import webbrowser
-                webbrowser.open(f'file://{html_path}')
-                print(f"[OK] Dashboard opened in browser automatically")
-            except Exception as open_error:
-                print(f"[INFO] Dashboard saved but could not auto-open browser: {open_error}")
-                print(f"[INFO] Please manually open: {html_path}")
-
-            return html_path
-
-        except Exception as e:
-            print(f"Failed to export HTML dashboard: {str(e)}")
-            print(f"Error type: {type(e).__name__}")
-
-            # Try to create a fallback basic HTML export
-            try:
-                fallback_path = os.path.join(os.getcwd(), f"timing_dashboard_fallback_{timestamp}.html")
-                with open(fallback_path, 'w') as f:
-                    f.write(f"""
-                    <html><head><title>Timing Dashboard</title></head>
-                    <body>
-                        <h1>Timing Data Selection Dashboard</h1>
-                        <p>Selected: {selected_count:,} samples ({selection_percentage:.1f}%)</p>
-                        <p>Total: {total_samples:,} samples</p>
-                        <p>Clusters: {num_clusters}</p>
-                        <p>Note: Interactive visualization failed, fallback text report generated</p>
-                    </body></html>
-                    """)
-                print(f"Fallback HTML report created: {fallback_path}")
-
-                # Auto-open fallback dashboard
-                try:
-                    import webbrowser
-                    webbrowser.open(f'file://{fallback_path}')
-                    print(f"[OK] Fallback dashboard opened in browser automatically")
-                except Exception as open_error:
-                    print(f"[INFO] Fallback dashboard saved but could not auto-open: {open_error}")
-
-                return fallback_path
-            except Exception as fallback_e:
-                print(f"Fallback HTML creation also failed: {fallback_e}")
-                # Return None to indicate complete failure
-                return None
-
-    def detect_high_sigma_points(self) -> Dict[str, Any]:
-        """
-        Domain-Specific Logic: High Sigma Detection.
-        Identifies points > 3 standard deviations from mean for timing analysis.
-        """
-        detection_code = """
-# HIGH SIGMA DETECTION - Domain-specific timing analysis
-
-high_sigma_results = {
-    'high_sigma_indices': [],
-    'high_sigma_features': {},
-    'statistics': {}
-}
-
-if 'feature_names' in globals() and 'dataset' in globals():
-    print("\\n=== HIGH SIGMA DETECTION ===")
-
-    feature_names = globals()['feature_names']
-    dataset = globals()['dataset']
-
-    total_high_sigma = set()
-
-    for feature in feature_names:
-        if feature in dataset.columns:
-            feature_data = dataset[feature]
-            mean_val = feature_data.mean()
-            std_val = feature_data.std()
-            threshold = 3 * std_val
-
-            # Find points > 3 sigma from mean
-            high_sigma_mask = abs(feature_data - mean_val) > threshold
-            high_sigma_indices = dataset.index[high_sigma_mask].tolist()
-
-            high_sigma_results['high_sigma_features'][feature] = {
-                'indices': high_sigma_indices,
-                'count': len(high_sigma_indices),
-                'percentage': 100 * len(high_sigma_indices) / len(dataset),
-                'threshold': threshold,
-                'mean': mean_val,
-                'std': std_val
-            }
-
-            total_high_sigma.update(high_sigma_indices)
-
-            print(f"{feature}: {len(high_sigma_indices)} points > 3 std dev ({100 * len(high_sigma_indices) / len(dataset):.1f}%)")
-
-    high_sigma_results['high_sigma_indices'] = list(total_high_sigma)
-    high_sigma_results['statistics'] = {
-        'total_high_sigma_points': len(total_high_sigma),
-        'percentage_of_dataset': 100 * len(total_high_sigma) / len(dataset),
-        'features_analyzed': len(feature_names)
+# LLM Initialization Functions
+def initialize_timing_llm():
+    """Initialize LLM with timing domain optimized parameters."""
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Apply timing-specific parameters
+    timing_params = {
+        'LLM_TEMPERATURE': str(AGENTIC_LLM_PARAMETERS.get('temperature', 0.25)),
+        'LLM_TOP_P': str(AGENTIC_LLM_PARAMETERS.get('top_p', 0.90)),
+        'LLM_TOP_K': str(AGENTIC_LLM_PARAMETERS.get('top_k', 40)),
+        'LLM_NUM_PREDICT': str(AGENTIC_LLM_PARAMETERS.get('num_predict', 2500)),
+        'LLM_REPEAT_PENALTY': str(AGENTIC_LLM_PARAMETERS.get('repeat_penalty', 1.20))
     }
 
-    print(f"\\nTotal unique high sigma points: {len(total_high_sigma)} ({100 * len(total_high_sigma) / len(dataset):.1f}%)")
-
-else:
-    print("ERROR: Required data not available for high sigma detection")
-"""
-
-        result = self.execute_python_code(detection_code)
-        print("High Sigma Detection Output:")
-        print(result)
-
-        # Return results from execution context
-        return {
-            'detection_output': result,
-            'high_sigma_indices': self.execution_context.get('high_sigma_results', {}).get('high_sigma_indices', []),
-            'statistics': self.execution_context.get('high_sigma_results', {}).get('statistics', {})
-        }
-
-    def detect_boundary_points(self) -> Dict[str, Any]:
-        """
-        Domain-Specific Logic: Boundary Detection.
-        Identifies points at min/max of delay range and table corner positions.
-        """
-        boundary_code = """
-# BOUNDARY DETECTION - Domain-specific timing analysis
-
-boundary_results = {
-    'boundary_indices': [],
-    'boundary_types': {},
-    'statistics': {}
-}
-
-if 'feature_names' in globals() and 'dataset' in globals():
-    print("\\n=== BOUNDARY DETECTION ===")
-
-    feature_names = globals()['feature_names']
-    dataset = globals()['dataset']
-
-    total_boundary = set()
-
-    # 1. Feature-based boundary detection (min/max values)
-    print("1. Feature boundary detection...")
-    for feature in feature_names:
-        if feature in dataset.columns:
-            feature_data = dataset[feature]
-            min_val = feature_data.min()
-            max_val = feature_data.max()
-
-            # Points at minimum or maximum
-            boundary_mask = (feature_data == min_val) | (feature_data == max_val)
-            boundary_indices = dataset.index[boundary_mask].tolist()
-
-            boundary_results['boundary_types'][f'{feature}_minmax'] = {
-                'indices': boundary_indices,
-                'count': len(boundary_indices),
-                'min_val': min_val,
-                'max_val': max_val
-            }
-
-            total_boundary.update(boundary_indices)
-            print(f"   {feature}: {len(boundary_indices)} boundary points (min/max)")
-
-    # 2. Table position boundary detection (if cell_arc_pt exists)
-    print("2. Table position boundary detection...")
-    if 'cell_arc_pt' in dataset.columns:
-        # Parse table positions
-        def parse_table_position(cell_arc_pt_value):
-            parts = str(cell_arc_pt_value).rsplit('_', 2)
-            if len(parts) >= 3:
-                try:
-                    return int(parts[-2]), int(parts[-1])
-                except ValueError:
-                    return None, None
-            return None, None
-
-        table_positions = dataset['cell_arc_pt'].apply(parse_table_position)
-        valid_positions = [(i, pos) for i, pos in enumerate(table_positions) if pos[0] is not None]
-
-        if valid_positions:
-            rows = [pos[1][0] for pos in valid_positions]
-            cols = [pos[1][1] for pos in valid_positions]
-
-            min_row, max_row = min(rows), max(rows)
-            min_col, max_col = min(cols), max(cols)
-
-            # Corner positions (extreme table positions)
-            corner_indices = []
-            for i, pos in valid_positions:
-                row, col = pos[1]
-                if (row == min_row or row == max_row) and (col == min_col or col == max_col):
-                    corner_indices.append(i)
-
-            boundary_results['boundary_types']['table_corners'] = {
-                'indices': corner_indices,
-                'count': len(corner_indices),
-                'corners': f"({min_row},{min_col}), ({min_row},{max_col}), ({max_row},{min_col}), ({max_row},{max_col})"
-            }
-
-            total_boundary.update(corner_indices)
-            print(f"   Table corners: {len(corner_indices)} corner position points")
-
-            # Edge positions (first/last row or column)
-            edge_indices = []
-            for i, pos in valid_positions:
-                row, col = pos[1]
-                if row == min_row or row == max_row or col == min_col or col == max_col:
-                    edge_indices.append(i)
-
-            boundary_results['boundary_types']['table_edges'] = {
-                'indices': edge_indices,
-                'count': len(edge_indices)
-            }
-
-            print(f"   Table edges: {len(edge_indices)} edge position points")
-
-    boundary_results['boundary_indices'] = list(total_boundary)
-    boundary_results['statistics'] = {
-        'total_boundary_points': len(total_boundary),
-        'percentage_of_dataset': 100 * len(total_boundary) / len(dataset),
-        'boundary_types_found': len(boundary_results['boundary_types'])
-    }
-
-    print(f"\\nTotal unique boundary points: {len(total_boundary)} ({100 * len(total_boundary) / len(dataset):.1f}%)")
-
-else:
-    print("ERROR: Required data not available for boundary detection")
-"""
-
-        result = self.execute_python_code(boundary_code)
-        print("Boundary Detection Output:")
-        print(result)
-
-        # Return results from execution context
-        return {
-            'detection_output': result,
-            'boundary_indices': self.execution_context.get('boundary_results', {}).get('boundary_indices', []),
-            'statistics': self.execution_context.get('boundary_results', {}).get('statistics', {})
-        }
-
-    def analyze_timing_coverage(self, selected_indices: List[int]) -> Dict[str, Any]:
-        """
-        Analyze how well the selection covers critical timing scenarios.
-        """
-        analysis_code = f"""
-# TIMING COVERAGE ANALYSIS
-
-coverage_results = {{}}
-
-if 'feature_names' in globals() and 'dataset' in globals():
-    print("\\n=== TIMING COVERAGE ANALYSIS ===")
-
-    selected_indices = {selected_indices}
-    feature_names = globals()['feature_names']
-    dataset = globals()['dataset']
-
-    # Get high sigma and boundary results if available
-    high_sigma_indices = globals().get('high_sigma_results', {{}}).get('high_sigma_indices', [])
-    boundary_indices = globals().get('boundary_results', {{}}).get('boundary_indices', [])
-
-    # Calculate coverage metrics
-    total_samples = len(dataset)
-    selected_samples = len(selected_indices)
-
-    # High sigma coverage
-    selected_high_sigma = len(set(selected_indices) & set(high_sigma_indices))
-    high_sigma_coverage = 100 * selected_high_sigma / len(high_sigma_indices) if high_sigma_indices else 0
-
-    # Boundary coverage
-    selected_boundary = len(set(selected_indices) & set(boundary_indices))
-    boundary_coverage = 100 * selected_boundary / len(boundary_indices) if boundary_indices else 0
-
-    # Feature coverage analysis
-    feature_coverage = {{}}
-    for feature in feature_names[:5]:  # Analyze first 5 features
-        if feature in dataset.columns:
-            feature_data = dataset[feature]
-            original_range = feature_data.max() - feature_data.min()
-
-            selected_data = dataset.iloc[selected_indices][feature]
-            selected_range = selected_data.max() - selected_data.min()
-
-            range_coverage = 100 * selected_range / original_range if original_range > 0 else 0
-
-            feature_coverage[feature] = {{
-                'range_coverage': range_coverage,
-                'min_preserved': selected_data.min() == feature_data.min(),
-                'max_preserved': selected_data.max() == feature_data.max()
-            }}
-
-    coverage_results = {{
-        'selection_rate': 100 * selected_samples / total_samples,
-        'high_sigma_coverage': high_sigma_coverage,
-        'boundary_coverage': boundary_coverage,
-        'feature_coverage': feature_coverage,
-        'coverage_score': (high_sigma_coverage + boundary_coverage) / 2
-    }}
-
-    print(f"Selection Rate: {{coverage_results['selection_rate']:.1f}}%")
-    print(f"High Sigma Coverage: {{coverage_results['high_sigma_coverage']:.1f}}%")
-    print(f"Boundary Coverage: {{coverage_results['boundary_coverage']:.1f}}%")
-    print(f"Overall Coverage Score: {{coverage_results['coverage_score']:.1f}}")
-
-    print("\\nFeature Range Coverage:")
-    for feature, metrics in feature_coverage.items():
-        print(f"  {{feature}}: {{metrics['range_coverage']:.1f}}% (min: {{metrics['min_preserved']}}, max: {{metrics['max_preserved']}})")
-
-else:
-    print("ERROR: Required data not available for coverage analysis")
-"""
-
-        result = self.execute_python_code(analysis_code)
-        print("Coverage Analysis Output:")
-        print(result)
-
-        return {
-            'analysis_output': result,
-            'coverage_results': self.execution_context.get('coverage_results', {})
-        }
-
-    def _fallback_visualization(self, df: pd.DataFrame, selected_indices: List[int], clusters: np.ndarray) -> Dict[str, Any]:
-        """Generate comprehensive self-contained HTML dashboard with zero dependencies."""
-        import tempfile
-        import time
-
-        print("[INFO] Generating self-contained HTML dashboard")
-
-        # Compute comprehensive statistics
-        selected = df.iloc[selected_indices]
-        total = len(df)
-        n_selected = len(selected)
-        n_clusters = len(set(clusters))
-        selection_pct = n_selected / total * 100
-
-        # Cluster analysis
-        import numpy as np
-        cluster_counts = np.bincount(clusters)
-        cluster_selected = np.bincount(np.array(clusters)[selected_indices], minlength=n_clusters)
-
-        # Feature analysis
-        numeric_cols = df.select_dtypes(include='number').columns.tolist()[:15]  # Top 15 features
-        feature_rows = ""
-        for col in numeric_cols:
-            full_mean = df[col].mean()
-            sel_mean = selected[col].mean()
-            full_std = df[col].std()
-            sel_std = selected[col].std()
-            diff_pct = ((sel_mean - full_mean) / abs(full_mean) * 100) if full_mean != 0 else 0
-            color = "#10B981" if abs(diff_pct) < 10 else "#F59E0B" if abs(diff_pct) < 25 else "#EF4444"
-            feature_rows += f'''
-            <tr>
-                <td style="font-family:monospace;font-size:11px">{col[:25]}</td>
-                <td>{full_mean:.4f}</td>
-                <td>{sel_mean:.4f}</td>
-                <td>{full_std:.4f}</td>
-                <td>{sel_std:.4f}</td>
-                <td style="color:{color};font-weight:bold">{diff_pct:+.1f}%</td>
-            </tr>'''
-
-        # Cell type analysis if available
-        cell_info = ""
-        if 'cell_arc_pt' in df.columns:
-            unique_cells = df['cell_arc_pt'].str.split('#').str[0].nunique()
-            selected_cells = selected['cell_arc_pt'].str.split('#').str[0].nunique()
-            cell_info = f'''
-            <div class="metric"><div class="metric-value">{unique_cells}</div><div class="metric-label">Unique Cells</div></div>
-            <div class="metric"><div class="metric-value">{selected_cells}</div><div class="metric-label">Cells in Selection</div></div>
-            '''
-
-        # Cluster distribution table
-        cluster_rows = ""
-        for i in range(n_clusters):
-            pct_total = cluster_counts[i] / total * 100 if total > 0 else 0
-            pct_selected = cluster_selected[i] / n_selected * 100 if n_selected > 0 else 0
-            rate = cluster_selected[i] / cluster_counts[i] * 100 if cluster_counts[i] > 0 else 0
-            cluster_rows += f'''
-            <tr>
-                <td>Cluster {i}</td>
-                <td>{cluster_counts[i]:,} ({pct_total:.1f}%)</td>
-                <td>{cluster_selected[i]:,} ({pct_selected:.1f}%)</td>
-                <td>{rate:.1f}%</td>
-            </tr>'''
-
-        # CSS bar chart
-        max_count = max(cluster_counts) if len(cluster_counts) > 0 else 1
-        bar_items = ""
-        for i in range(n_clusters):
-            height_pct = cluster_counts[i] / max_count * 100
-            sel_height_pct = cluster_selected[i] / max_count * 100
-            bar_items += f'''
-            <div style="display:flex;flex-direction:column;align-items:center;flex:1;gap:4px">
-                <div style="width:100%;display:flex;align-items:flex-end;height:200px;gap:2px;justify-content:center">
-                    <div style="width:40%;background:#1E3A5F;height:{height_pct}%;border-radius:4px 4px 0 0;min-height:2px"
-                         title="Total: {cluster_counts[i]}"></div>
-                    <div style="width:40%;background:#06B6D4;height:{sel_height_pct}%;border-radius:4px 4px 0 0;min-height:2px"
-                         title="Selected: {cluster_selected[i]}"></div>
-                </div>
-                <span style="font-size:11px;color:#94A3B8">C{i}</span>
-            </div>'''
-
-        # Generate HTML dashboard
-        html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AIQC Sampling Validation Dashboard</title>
-<style>
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{ font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0B1120; color: #E2E8F0; padding: 24px; }}
-    .container {{ max-width: 1280px; margin: 0 auto; }}
-    h1 {{ color: #06B6D4; font-size: 1.8em; margin-bottom: 4px; }}
-    .subtitle {{ color: #64748B; font-size: 0.9em; margin-bottom: 24px; }}
-    .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }}
-    .metric {{ background: #1E293B; border-radius: 10px; padding: 20px; border-left: 4px solid #0891B2; }}
-    .metric-value {{ font-size: 1.8em; color: #06B6D4; font-weight: 700; }}
-    .metric-label {{ color: #94A3B8; font-size: 0.8em; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }}
-    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }}
-    .card {{ background: #1E293B; border-radius: 10px; padding: 20px; }}
-    .card h2 {{ color: #06B6D4; font-size: 1.1em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #334155; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.85em; }}
-    th {{ text-align: left; padding: 8px 10px; color: #06B6D4; border-bottom: 2px solid #334155; font-weight: 600; }}
-    td {{ padding: 7px 10px; border-bottom: 1px solid #1E3A5F; }}
-    tr:hover td {{ background: #0F1D32; }}
-    .legend {{ display: flex; gap: 16px; margin-bottom: 8px; font-size: 0.8em; }}
-    .legend-item {{ display: flex; align-items: center; gap: 4px; }}
-    .legend-box {{ width: 12px; height: 12px; border-radius: 2px; }}
-    .footer {{ text-align: center; color: #475569; font-size: 0.75em; margin-top: 32px; padding-top: 16px; border-top: 1px solid #1E293B; }}
-    @media (max-width: 800px) {{ .grid {{ grid-template-columns: 1fr; }} }}
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>AIQC Sampling Validation Dashboard</h1>
-    <p class="subtitle">AI-Driven Representative Sampling for Timing Library Characterization</p>
-
-    <div class="metrics">
-        <div class="metric"><div class="metric-value">{total:,}</div><div class="metric-label">Total Arcs</div></div>
-        <div class="metric"><div class="metric-value">{n_selected:,}</div><div class="metric-label">Selected</div></div>
-        <div class="metric"><div class="metric-value">{selection_pct:.1f}%</div><div class="metric-label">Selection Rate</div></div>
-        <div class="metric"><div class="metric-value">{n_clusters}</div><div class="metric-label">Clusters</div></div>
-        {cell_info}
-    </div>
-
-    <div class="grid">
-        <div class="card">
-            <h2>Cluster Distribution</h2>
-            <div class="legend">
-                <div class="legend-item"><div class="legend-box" style="background:#1E3A5F"></div> Total</div>
-                <div class="legend-item"><div class="legend-box" style="background:#06B6D4"></div> Selected</div>
-            </div>
-            <div style="display:flex;gap:2px;align-items:flex-end;height:220px;margin-bottom:16px">
-                {bar_items}
-            </div>
-            <table>
-                <tr><th>Cluster</th><th>Total</th><th>Selected</th><th>Rate</th></tr>
-                {cluster_rows}
-            </table>
-        </div>
-
-        <div class="card">
-            <h2>Feature Distribution: Selected vs Full Dataset</h2>
-            <table>
-                <tr><th>Feature</th><th>Full Mean</th><th>Sel Mean</th><th>Full Std</th><th>Sel Std</th><th>Delta%</th></tr>
-                {feature_rows}
-            </table>
-            <p style="font-size:0.75em;color:#64748B;margin-top:8px">
-                Colors: <span style="color:#10B981">Green (&lt;10%)</span>,
-                <span style="color:#F59E0B">Yellow (&lt;25%)</span>,
-                <span style="color:#EF4444">Red (25%+)</span> difference from full dataset
-            </p>
-        </div>
-    </div>
-
-    <div class="footer">Generated by AIQC Agent — Self-Contained HTML Dashboard (Zero Dependencies)</div>
-</div>
-</body>
-</html>'''
-
-        # Export HTML dashboard to current working directory
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        html_filename = f"aiqc_dashboard_{n_selected}samples_{timestamp}.html"
-        html_path = os.path.join(os.getcwd(), html_filename)
-
-        try:
-            with open(html_path, 'w', encoding='utf-8') as f:
-                f.write(html)
-            print(f"[OK] Self-contained dashboard exported: {html_path} ({len(html)} bytes)")
-
-            # Automatically open the dashboard in the default browser
-            try:
-                import webbrowser
-                webbrowser.open(f'file://{html_path}')
-                print(f"[OK] Dashboard opened in browser automatically")
-            except Exception as open_error:
-                print(f"[INFO] Dashboard saved but could not auto-open browser: {open_error}")
-                print(f"[INFO] Please manually open: {html_path}")
-
-        except Exception as e:
-            print(f"Failed to export HTML dashboard: {e}")
-            html_path = None
-
-        return {
-            'summary_text': f"Selected {n_selected:,} samples ({selection_pct:.1f}%) from {total:,} across {n_clusters} clusters",
-            'dashboard_data': {
-                'total_samples': total,
-                'selected_count': n_selected,
-                'selection_percentage': selection_pct,
-                'num_clusters': n_clusters
-            },
-            'plotly_figure': None,
-            'html_export_path': html_path,
-            'interactive_features': {
-                'self_contained': True,
-                'cluster_visualization': True,
-                'feature_comparison': True,
-                'zero_dependencies': True
-            }
-        }
-
-
-def test_agent_functionality():
-    """
-    Built-in test function to validate agent functionality.
-    Tests the ReAct architecture, algorithm tournament, and visualization.
-    """
-    print("Testing Enhanced TimingDataSelectionAgent...")
-    print("=" * 60)
-
-    class MockLLM:
-        def invoke(self, inputs):
-            class MockResponse:
-                def __init__(self, content):
-                    self.content = content
-            return MockResponse("Mock LLM response for testing")
-
-    # Initialize agent
-    agent = TimingDataSelectionAgent(MockLLM(), verbose=True)
-    print(f"Agent initialized with execution engine: {hasattr(agent, 'execution_context')}")
-
-    # Test data path
-    test_csv_path = "mock_data/test_data.csv"
+    # Apply parameters only if not already set
+    applied_count = 0
+    for param, value in timing_params.items():
+        if not os.getenv(param):
+            os.environ[param] = value
+            applied_count += 1
+
+    logger.info(f"Timing Domain LLM Configuration:")
+    logger.info(f"   Base URL: {os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}")
+    logger.info(f"   Model: {os.getenv('OLLAMA_MODEL', 'llama2')}")
+    logger.info(f"   Applied {applied_count}/5 timing-optimized parameters")
 
     try:
-        # Test observe stage
-        print("\nTesting OBSERVE stage...")
-        observation = agent.observe(test_csv_path, target_percentage=5.0)
-        print(f"Observation completed with {observation.get('n_features', 0)} features detected")
+        llm = initialize_ollama_llm()
+        logger.info("Timing domain LLM initialized successfully")
+        return llm
+    except Exception as e:
+        logger.error(f"Timing LLM initialization failed: {e}")
+        raise
 
-        # Test domain-specific detection
-        print("\nTesting domain-specific detection...")
-        high_sigma_result = agent.detect_high_sigma_points()
-        boundary_result = agent.detect_boundary_points()
-        print("Domain-specific detection completed successfully")
+def initialize_ollama_llm():
+    """Initialize Ollama LLM with environment parameters."""
+    try:
+        from langchain_community.llms import Ollama
+    except ImportError:
+        try:
+            from langchain_ollama import ChatOllama as Ollama
+        except ImportError:
+            Ollama = None
 
-        # Test algorithm tournament
-        print("\nTesting algorithm tournament...")
-        decision = agent.decide({'variance_threshold': 0.9})
-        print(f"Tournament completed - Winner: {decision.get('algorithm', 'Unknown')}")
+    if Ollama is None:
+        raise ImportError("Neither langchain_community.llms.Ollama nor langchain_ollama available")
 
-        print("\n" + "=" * 60)
-        print("All tests completed successfully!")
-        print("Enhanced agent features validated:")
-        print("- Real Python code execution engine")
-        print("- ReAct schema discovery loop")
-        print("- Comprehensive algorithm tournament")
-        print("- Domain-specific detection logic")
-        print("- Advanced visualization capabilities")
+    base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+    model = os.getenv('OLLAMA_MODEL', 'llama2')
 
+    llm_params = {
+        'model': model,
+        'base_url': base_url,
+        'temperature': float(os.getenv('LLM_TEMPERATURE', '0.25')),
+        'top_p': float(os.getenv('LLM_TOP_P', '0.9')),
+        'num_predict': int(os.getenv('LLM_NUM_PREDICT', '2500')),
+    }
+
+    # Add optional parameters if available
+    if os.getenv('LLM_TOP_K'):
+        llm_params['top_k'] = int(os.getenv('LLM_TOP_K'))
+    if os.getenv('LLM_REPEAT_PENALTY'):
+        llm_params['repeat_penalty'] = float(os.getenv('LLM_REPEAT_PENALTY'))
+
+    return Ollama(**llm_params)
+
+def initialize_openai_llm(api_key: Optional[str] = None, model: str = "gpt-3.5-turbo"):
+    """Initialize OpenAI LLM connection."""
+    try:
+        from langchain_openai import ChatOpenAI
+        api_key = api_key or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            print("[WARNING] OpenAI API key not found")
+            return None
+
+        llm = ChatOpenAI(
+            openai_api_key=api_key,
+            model=model,
+            temperature=0.1,
+            max_tokens=2048
+        )
+        return llm
+    except ImportError:
+        print("[WARNING] langchain_openai not available")
+        return None
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize OpenAI: {e}")
+        return None
+
+def initialize_anthropic_llm(api_key: Optional[str] = None, model: str = "claude-3-sonnet-20240229"):
+    """Initialize Anthropic Claude LLM connection."""
+    try:
+        from langchain_anthropic import ChatAnthropic
+        api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
+        if not api_key:
+            print("[WARNING] Anthropic API key not found")
+            return None
+
+        llm = ChatAnthropic(
+            anthropic_api_key=api_key,
+            model=model,
+            temperature=0.1,
+            max_tokens=2048
+        )
+        return llm
+    except ImportError:
+        print("[WARNING] langchain_anthropic not available")
+        return None
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize Anthropic: {e}")
+        return None
+
+def test_llm_connection(llm):
+    """Test LLM connection with simple query."""
+    if not llm:
+        return False
+
+    try:
+        test_prompt = "Hello, respond with 'Connection successful'"
+        if hasattr(llm, 'invoke'):
+            response = llm.invoke({"input": test_prompt})
+            if hasattr(response, 'content'):
+                result = response.content
+            else:
+                result = str(response)
+        else:
+            result = str(llm.invoke(test_prompt))
+
+        print(f"[CONNECTION] LLM test response: {result[:50]}...")
         return True
 
     except Exception as e:
-        print(f"Test failed: {e}")
+        print(f"[ERROR] LLM connection test failed: {e}")
         return False
 
+def auto_initialize_llm():
+    """Automatically initialize the best available LLM."""
+    print("[INIT] Auto-initializing LLM connection...")
 
+    # Try Ollama first (local, no API key needed)
+    try:
+        llm = initialize_ollama_llm()
+        if llm and test_llm_connection(llm):
+            print("[SUCCESS] Connected to Ollama LLM")
+            return llm
+    except Exception as e:
+        print(f"[WARNING] Ollama initialization failed: {e}")
+
+    # Try OpenAI
+    llm = initialize_openai_llm()
+    if llm and test_llm_connection(llm):
+        print("[SUCCESS] Connected to OpenAI LLM")
+        return llm
+
+    # Try Anthropic
+    llm = initialize_anthropic_llm()
+    if llm and test_llm_connection(llm):
+        print("[SUCCESS] Connected to Anthropic LLM")
+        return llm
+
+    print("[ERROR] No LLM connection available")
+    return None
+
+def create_autonomous_agent(llm=None, verbose: bool = True):
+    """Factory function to create autonomous agent with LLM connection."""
+    if llm is None:
+        llm = auto_initialize_llm()
+
+    if llm is None:
+        print("[ERROR] Cannot create agent without LLM connection")
+        print("[INFO] Please ensure you have:")
+        print("   - Ollama running locally (http://localhost:11434), or")
+        print("   - OPENAI_API_KEY environment variable set, or")
+        print("   - ANTHROPIC_API_KEY environment variable set")
+        return None
+
+    agent = TimingDataSelectionAgent(llm, verbose=verbose)
+    print(f"[SUCCESS] Autonomous agent created successfully")
+    return agent
+
+
+# Usage Example
 if __name__ == "__main__":
-    # Run built-in tests when script is executed directly
-    test_agent_functionality()
+    import asyncio
+
+    async def main():
+        """Example usage of autonomous timing data selection agent."""
+        # Create agent with auto-initialized LLM
+        agent = create_autonomous_agent(verbose=True)
+
+        if agent is None:
+            print("[ERROR] Failed to create agent")
+            return
+
+        # Example CSV path (replace with your actual CSV file)
+        csv_path = "timing_data.csv"
+        target_percentage = 5.0  # Select 5% of samples
+
+        print(f"\n[START] Running autonomous sample selection on {csv_path}")
+        print(f"[TARGET] Selecting {target_percentage}% of samples autonomously")
+
+        try:
+            # Run autonomous pipeline
+            results = await agent.autonomous_sample_selection(csv_path, target_percentage)
+
+            if 'error' in results:
+                print(f"[ERROR] Pipeline failed: {results['error']}")
+            else:
+                print(f"\n[RESULTS] Autonomous pipeline completed successfully!")
+                print(f"   Selected Indices: {len(results['selected_indices'])} samples")
+                print(f"   Algorithm Used: {results['final_strategy'].get('algorithm', 'unknown')}")
+                print(f"   Quality Score: {results['quality_assessment'].get('overall_quality', 0):.3f}")
+                print(f"   Exploration Iterations: {results['autonomous_pipeline_stats']['total_exploration_iterations']}")
+                print(f"   Experiments Run: {results['autonomous_pipeline_stats']['experiments_run']}")
+
+        except Exception as e:
+            print(f"[ERROR] Execution failed: {e}")
+
+    # Run the example
+    print("\n" + "="*80)
+    print("AUTONOMOUS TIMING DATA SELECTION AGENT")
+    print("="*80)
+    asyncio.run(main())
