@@ -25,6 +25,7 @@ from .intelligent_sampling_engine import (
     EvidenceBasedSampler,
     IntelligentAlgorithmSelector
 )
+from .analysis_visualizer import AnalysisVisualizer
 
 # Core ML libraries with fallbacks
 try:
@@ -342,6 +343,7 @@ class TimingDataSelectionAgent:
         self.experiment_executor = RealIntelligenceExperimentExecutor(verbose=verbose)
         self.evidence_sampler = EvidenceBasedSampler()
         self.insights_memory = ConcreteInsightsMemory()
+        self.visualizer = AnalysisVisualizer()
 
         # Conversation tracking for UI
         self.conversation_history = []
@@ -420,7 +422,9 @@ Answer with specific strategy recommendations based on the numerical evidence ab
         print(f"\n[PHASE 2] \033[36mLLM REASONING\033[0m ABOUT REAL DATA")
         if self.llm:
             llm_reasoning = self.llm_reason_about_data(exploration_results['data_characteristics'])
-            print(f"[LLM-REASONING] {llm_reasoning}")
+            # Format the LLM reasoning for terminal display
+            formatted_reasoning = self._format_llm_response(llm_reasoning)
+            print(f"[LLM-REASONING] {formatted_reasoning}")
         else:
             llm_reasoning = "Statistical analysis complete - proceeding with evidence-based strategy"
             print(f"[STATISTICAL-REASONING] LLM not available, using computed data characteristics for decisions")
@@ -495,18 +499,44 @@ Answer with specific strategy recommendations based on the numerical evidence ab
 
             total_time = time.time() - start_time
 
+            # Build result safely with error handling for each component
             final_result = {
-                'selected_indices': sampling_result['selected_indices'],
-                'selection_method': sampling_result.get('method_used', 'unknown'),
-                'data_analysis': exploration_results,
-                'experiment_results': experiment_results,
-                'quality_metrics': quality_metrics,
+                'selected_indices': sampling_result.get('selected_indices', []),
+                'selection_method': sampling_result.get('method_used', sampling_result.get('method', 'unknown')),
                 'execution_time': total_time,
-                'insights_stored': iteration_id,
-                'reasoning_chain': self._build_reasoning_chain(exploration_results, experiment_results, sampling_result),
-                'llm_reasoning': llm_reasoning if self.llm else None,
                 'success': True
             }
+
+            # Add components safely
+            try:
+                final_result['data_analysis'] = exploration_results
+            except Exception as e:
+                final_result['data_analysis_error'] = str(e)
+
+            try:
+                final_result['experiment_results'] = experiment_results
+            except Exception as e:
+                final_result['experiment_results_error'] = str(e)
+
+            try:
+                final_result['quality_metrics'] = quality_metrics
+            except Exception as e:
+                final_result['quality_metrics_error'] = str(e)
+
+            try:
+                final_result['insights_stored'] = iteration_id
+            except Exception as e:
+                final_result['insights_stored_error'] = str(e)
+
+            try:
+                final_result['reasoning_chain'] = self._build_reasoning_chain(exploration_results, experiment_results, sampling_result)
+            except Exception as e:
+                final_result['reasoning_chain'] = [f"Reasoning error: {str(e)}"]
+
+            try:
+                final_result['llm_reasoning'] = llm_reasoning if self.llm else None
+            except Exception as e:
+                final_result['llm_reasoning_error'] = str(e)
 
             if self.verbose:
                 print(f"   \033[32mCOMPLETED:\033[0m Result building successful")
@@ -539,6 +569,25 @@ Answer with specific strategy recommendations based on the numerical evidence ab
             # Add analysis insights summary
             if self.verbose:
                 self._print_analysis_summary(final_result)
+
+                # Generate and open analysis plots
+                print(f"\n\033[33mACTION:\033[0m Generating analysis visualization...")
+                try:
+                    html_file = self.visualizer.generate_analysis_plots(
+                        self.current_data,
+                        final_result['data_analysis']['data_characteristics'],
+                        final_result['selected_indices']
+                    )
+                    print(f"\033[32mCOMPLETED:\033[0m Analysis report generated: {html_file}")
+
+                    # Attempt to open in browser
+                    if self.visualizer.open_in_browser(html_file):
+                        print(f"\033[32mOPENED:\033[0m Analysis report opened in browser")
+                    else:
+                        print(f"\033[33mINFO:\033[0m Open this file manually: {html_file}")
+
+                except Exception as e:
+                    print(f"\033[31mERROR:\033[0m Failed to generate visualization: {e}")
         else:
             print(f"\n[ERROR] Analysis failed: {final_result.get('error', 'Unknown error')}")
 
@@ -593,6 +642,27 @@ Answer with specific strategy recommendations based on the numerical evidence ab
             print("  High outlier presence - outlier-preserving sampling recommended")
         else:
             print("  Uniform sampling appears suitable for this dataset")
+
+    def _format_llm_response(self, response: str) -> str:
+        """Format LLM response for clean terminal display"""
+        if not response:
+            return "No response received"
+
+        # Remove markdown formatting
+        cleaned = response.replace('**', '').replace('*', '').replace('#', '')
+
+        # Remove extra whitespace
+        cleaned = ' '.join(cleaned.split())
+
+        # Truncate if too long
+        if len(cleaned) > 200:
+            cleaned = cleaned[:200] + "..."
+
+        # Ensure it ends with proper punctuation
+        if cleaned and not cleaned.endswith(('.', '!', '?')):
+            cleaned += "."
+
+        return cleaned
 
     def _assess_selection_quality(self, selected_indices: List[int], characteristics: Dict[str, Any]) -> Dict[str, Any]:
         """Assess quality of sample selection using statistical measures"""
@@ -659,13 +729,28 @@ Answer with specific strategy recommendations based on the numerical evidence ab
             reasoning.append(f"Low clustering tendency detected (Hopkins={clustering.get('hopkins_statistic', 0):.3f})")
 
         # Algorithm selection reasoning
-        if experiments:
-            best_exp = max(experiments, key=lambda x: x.get('performance_score', 0))
-            reasoning.append(f"Selected {best_exp.get('algorithm', 'unknown')} algorithm (score: {best_exp.get('performance_score', 0):.3f})")
+        try:
+            if experiments and len(experiments) > 0:
+                best_exp = max(experiments, key=lambda x: x.get('performance_score', 0))
+                algorithm_name = best_exp.get('algorithm_name', best_exp.get('algorithm', 'unknown'))
+                reasoning.append(f"Selected {algorithm_name} algorithm (score: {best_exp.get('performance_score', 0):.3f})")
+            else:
+                reasoning.append("No algorithm experiments completed")
+        except Exception as e:
+            reasoning.append(f"Algorithm selection: {str(e)}")
 
         # Sampling method reasoning
-        reasoning.append(f"Applied {sampling.get('method_used', 'unknown')} sampling strategy")
-        reasoning.append(sampling.get('reasoning', 'Method selection completed'))
+        try:
+            method = sampling.get('method_used', sampling.get('method', 'unknown'))
+            reasoning.append(f"Applied {method} sampling strategy")
+
+            sample_reasoning = sampling.get('reasoning', '')
+            if sample_reasoning and sample_reasoning != 'unknown':
+                reasoning.append(sample_reasoning)
+            else:
+                reasoning.append("Method selection completed")
+        except Exception as e:
+            reasoning.append(f"Sampling method: {str(e)}")
 
         return reasoning
 
