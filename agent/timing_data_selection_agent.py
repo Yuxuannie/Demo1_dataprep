@@ -168,7 +168,7 @@ class AutonomousExplorationEngine:
                 print(f"[\033[93mACTION\033[0m] {action}")
 
                 # Execute autonomous action with detailed analysis
-                discoveries = await self._execute_autonomous_action_enhanced(action, data, iteration)
+                discoveries = await self._execute_autonomous_action_enhanced(action, data, iteration, thought=thought)
 
                 print(f"[\033[92mOBSERVE\033[0m] {observation}")
 
@@ -333,7 +333,7 @@ class AutonomousExplorationEngine:
 
         return discoveries
 
-    async def _execute_autonomous_action_enhanced(self, action: str, data, iteration: int) -> Dict[str, Any]:
+    async def _execute_autonomous_action_enhanced(self, action: str, data, iteration: int, thought: str = "") -> Dict[str, Any]:
         """Execute autonomous action with enhanced analysis and code generation."""
         print(f"[\033[93mEXECUTE\033[0m] Executing autonomous action: {action}")
 
