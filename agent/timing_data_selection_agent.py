@@ -122,6 +122,15 @@ class AutonomousExplorationEngine:
         self.iteration_count = 0
         self.max_iterations = 50
 
+        # INTELLIGENT MEMORY: Track algorithm performance across iterations
+        self.algorithm_penalties = {}  # algorithm_name -> penalty score (0.0 to 1.0)
+        self.algorithm_history = {}   # algorithm_name -> list of scores
+        self.banned_algorithms = set()  # algorithms that consistently fail
+
+        # SPEED OPTIMIZATION: Cache expensive operations
+        self.llm_response_cache = {}  # context_hash -> response
+        self.algorithm_discovery_cache = {}  # data_characteristics -> algorithms
+
     async def autonomous_explore(self, data, target_percentage: float = 5.0) -> Dict[str, Any]:
         """Agent autonomously explores the data without hardcoded patterns."""
         self.execution_context['current_data'] = data
@@ -356,12 +365,15 @@ class AutonomousExplorationEngine:
                         'correlations': np.corrcoef(X.T).tolist() if X.shape[1] > 1 else [[1.0]]
                     }
 
-                    # PERFORMANCE OPTIMIZATION: Sample data for large datasets
+                    # INTELLIGENT SAMPLING: Context-aware sampling based on agent's goal
                     if len(X_scaled) > 5000:
-                        print(f"[\033[93mOPTIMIZE\033[0m] Large dataset detected ({len(X_scaled)} samples), sampling 5000 for faster processing")
-                        sample_indices = np.random.choice(len(X_scaled), size=5000, replace=False)
-                        X_sample = X_scaled[sample_indices]
+                        sampling_strategy = self._determine_sampling_strategy(thought, action)
+                        print(f"[\033[93mINTELLIGENT\033[0m] Large dataset detected ({len(X_scaled)} samples)")
+                        print(f"[\033[93mINTELLIGENT\033[0m] Sampling strategy: {sampling_strategy}")
+
+                        X_sample, sample_indices = self._smart_sample(X_scaled, 5000, sampling_strategy, thought, action)
                         sample_mode = True
+                        print(f"[\033[93mINTELLIGENT\033[0m] Sampled {len(X_sample)} points using {sampling_strategy} strategy")
                     else:
                         X_sample = X_scaled
                         sample_mode = False
@@ -458,6 +470,10 @@ class AutonomousExplorationEngine:
                         best_algorithm = 'none'
                         best_score = 0.0
                         clustering_results = {}
+
+                    # UPDATE ALGORITHM MEMORY: Learn from this iteration's results
+                    if tested_algorithms:
+                        self._update_algorithm_memory(tested_algorithms)
 
                     discoveries.update({
                         'data_shape': data.shape,
@@ -827,6 +843,9 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
         - Iteration: {iteration}
         """
 
+        # INTELLIGENT MEMORY: Apply algorithm penalties and bans
+        penalty_context = self._build_penalty_context()
+
         # Use learned preferences if available
         preferences = self.get_learned_preferences()
         if preferences['preferred_algorithms'] and iteration > 2:
@@ -834,11 +853,14 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
             discovery_prompt = f"""
             {data_context}
 
+            {penalty_context}
+
             Based on previous exploration, these algorithms showed promise: {preferences['preferred_algorithms']}
             Average quality so far: {preferences['average_quality']:.3f}
 
             Autonomously suggest 2-4 clustering algorithms that would be most suitable for this semiconductor timing data.
             Consider: data density patterns, outlier handling, parameter sensitivity, scalability.
+            AVOID algorithms that have consistently failed in previous iterations.
 
             Respond with algorithm suggestions in this format:
             ALGORITHM: [name]
@@ -850,10 +872,13 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
             discovery_prompt = f"""
             {data_context}
 
+            {penalty_context}
+
             As an autonomous ML agent analyzing semiconductor timing data, suggest 3-5 clustering algorithms
             that would be most effective for discovering timing violation patterns and process corner variations.
 
             Consider the data characteristics and provide diverse algorithmic approaches.
+            AVOID algorithms that have consistently failed in previous iterations.
 
             Respond with algorithm suggestions in this format:
             ALGORITHM: [name]
@@ -868,9 +893,14 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
             # Parse LLM response into algorithm configurations
             algorithm_suggestions = self._parse_algorithm_suggestions(response, X_scaled)
 
+            # INTELLIGENT FILTERING: Remove banned algorithms and apply penalties
+            algorithm_suggestions = self._filter_algorithms_by_memory(algorithm_suggestions)
+
             print(f"[\033[96mDISCOVERY\033[0m] Discovered {len(algorithm_suggestions)} algorithms to explore")
             for i, alg in enumerate(algorithm_suggestions):
-                print(f"[\033[96mDISCOVERY\033[0m] {i+1}. {alg['name']}: {alg['reasoning'][:100]}...")
+                penalty = self.algorithm_penalties.get(alg['name'], 0.0)
+                penalty_str = f" (penalty: {penalty:.2f})" if penalty > 0 else ""
+                print(f"[\033[96mDISCOVERY\033[0m] {i+1}. {alg['name']}: {alg['reasoning'][:100]}...{penalty_str}")
                 # Show detailed reasoning for debugging
                 print(f"[\033[96mDETAILS\033[0m]    Full reasoning: {alg['reasoning']}")
                 if 'adaptive_params' in alg:
@@ -953,6 +983,243 @@ Should you continue exploring? Respond with only 'CONTINUE' or 'STOP' and brief 
             return potential_reasoning.strip() or "Autonomous selection based on data characteristics"
 
         return "Autonomous selection based on data characteristics"
+
+    def _determine_sampling_strategy(self, thought: str, action: str) -> str:
+        """Determine intelligent sampling strategy based on agent's reasoning."""
+        thought_lower = thought.lower()
+        action_lower = action.lower()
+
+        # Check for outlier/worst-case focused goals
+        outlier_keywords = ['outlier', 'worst-case', 'violation', 'extreme', 'anomaly', 'critical', 'edge case']
+        if any(keyword in thought_lower or keyword in action_lower for keyword in outlier_keywords):
+            return "outlier_focused"
+
+        # Check for feature analysis goals
+        feature_keywords = ['feature', 'importance', 'selection', 'dimension', 'column']
+        if any(keyword in thought_lower or keyword in action_lower for keyword in feature_keywords):
+            return "feature_diverse"
+
+        # Check for pattern discovery goals
+        pattern_keywords = ['pattern', 'cluster', 'group', 'segment', 'category']
+        if any(keyword in thought_lower or keyword in action_lower for keyword in pattern_keywords):
+            return "stratified"
+
+        # Default to random
+        return "random"
+
+    def _smart_sample(self, X_scaled: np.ndarray, target_size: int, strategy: str, thought: str, action: str) -> tuple:
+        """Perform intelligent sampling based on strategy and agent reasoning."""
+        try:
+            if strategy == "outlier_focused":
+                return self._outlier_focused_sampling(X_scaled, target_size)
+            elif strategy == "feature_diverse":
+                return self._feature_diverse_sampling(X_scaled, target_size)
+            elif strategy == "stratified":
+                return self._stratified_sampling(X_scaled, target_size)
+            else:  # random fallback
+                indices = np.random.choice(len(X_scaled), size=target_size, replace=False)
+                return X_scaled[indices], indices
+        except Exception as e:
+            print(f"[\033[93mINTELLIGENT\033[0m] Sampling failed: {e}, using random fallback")
+            indices = np.random.choice(len(X_scaled), size=target_size, replace=False)
+            return X_scaled[indices], indices
+
+    def _outlier_focused_sampling(self, X_scaled: np.ndarray, target_size: int) -> tuple:
+        """Sample focusing on outliers and extreme values for worst-case analysis."""
+        # Calculate outlier scores using isolation forest
+        try:
+            from sklearn.ensemble import IsolationForest
+            iso_forest = IsolationForest(contamination=0.1, random_state=42, n_estimators=50)
+            outlier_scores = iso_forest.fit_predict(X_scaled)
+
+            # Get outlier indices (outliers are marked as -1)
+            outlier_indices = np.where(outlier_scores == -1)[0]
+            normal_indices = np.where(outlier_scores == 1)[0]
+
+            print(f"[\033[93mINTELLIGENT\033[0m] Found {len(outlier_indices)} outliers, {len(normal_indices)} normal points")
+
+            # Sample 70% outliers, 30% normal for worst-case analysis
+            outlier_sample_size = min(int(target_size * 0.7), len(outlier_indices))
+            normal_sample_size = target_size - outlier_sample_size
+
+            selected_outliers = np.random.choice(outlier_indices, size=outlier_sample_size, replace=False)
+            selected_normal = np.random.choice(normal_indices, size=normal_sample_size, replace=len(normal_indices) < normal_sample_size)
+
+            selected_indices = np.concatenate([selected_outliers, selected_normal])
+            np.random.shuffle(selected_indices)
+
+            print(f"[\033[93mINTELLIGENT\033[0m] Outlier-focused sample: {outlier_sample_size} outliers + {normal_sample_size} normal")
+            return X_scaled[selected_indices], selected_indices
+
+        except Exception as e:
+            print(f"[\033[93mINTELLIGENT\033[0m] Outlier detection failed: {e}, using variance-based sampling")
+            return self._variance_based_sampling(X_scaled, target_size)
+
+    def _feature_diverse_sampling(self, X_scaled: np.ndarray, target_size: int) -> tuple:
+        """Sample to maximize feature diversity for feature analysis."""
+        # Use k-means to find diverse regions in feature space
+        try:
+            from sklearn.cluster import KMeans
+            n_clusters = min(target_size // 10, 50)  # Create regions
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=3)
+            cluster_labels = kmeans.fit_predict(X_scaled)
+
+            # Sample proportionally from each cluster
+            selected_indices = []
+            samples_per_cluster = target_size // n_clusters
+            remainder = target_size % n_clusters
+
+            for cluster_id in range(n_clusters):
+                cluster_indices = np.where(cluster_labels == cluster_id)[0]
+                if len(cluster_indices) > 0:
+                    sample_size = samples_per_cluster + (1 if cluster_id < remainder else 0)
+                    sample_size = min(sample_size, len(cluster_indices))
+                    selected = np.random.choice(cluster_indices, size=sample_size, replace=False)
+                    selected_indices.extend(selected)
+
+            selected_indices = np.array(selected_indices[:target_size])
+            print(f"[\033[93mINTELLIGENT\033[0m] Feature-diverse sample: {len(selected_indices)} points from {n_clusters} regions")
+            return X_scaled[selected_indices], selected_indices
+
+        except Exception as e:
+            print(f"[\033[93mINTELLIGENT\033[0m] Feature diverse sampling failed: {e}, using random")
+            indices = np.random.choice(len(X_scaled), size=target_size, replace=False)
+            return X_scaled[indices], indices
+
+    def _stratified_sampling(self, X_scaled: np.ndarray, target_size: int) -> tuple:
+        """Sample maintaining data distribution for pattern discovery."""
+        # Quick clustering to identify strata
+        try:
+            from sklearn.cluster import KMeans
+            n_strata = min(10, target_size // 100)  # Conservative number of strata
+            kmeans = KMeans(n_clusters=n_strata, random_state=42, n_init=3)
+            strata_labels = kmeans.fit_predict(X_scaled)
+
+            selected_indices = []
+            for stratum in range(n_strata):
+                stratum_indices = np.where(strata_labels == stratum)[0]
+                stratum_size = int(target_size * len(stratum_indices) / len(X_scaled))
+                stratum_size = max(1, min(stratum_size, len(stratum_indices)))
+
+                selected = np.random.choice(stratum_indices, size=stratum_size, replace=False)
+                selected_indices.extend(selected)
+
+            selected_indices = np.array(selected_indices[:target_size])
+            print(f"[\033[93mINTELLIGENT\033[0m] Stratified sample: {len(selected_indices)} points preserving distribution")
+            return X_scaled[selected_indices], selected_indices
+
+        except Exception as e:
+            print(f"[\033[93mINTELLIGENT\033[0m] Stratified sampling failed: {e}, using random")
+            indices = np.random.choice(len(X_scaled), size=target_size, replace=False)
+            return X_scaled[indices], indices
+
+    def _variance_based_sampling(self, X_scaled: np.ndarray, target_size: int) -> tuple:
+        """Sample points with high variance as proxy for outliers."""
+        # Calculate per-point variance
+        point_variances = np.var(X_scaled, axis=1)
+        high_var_indices = np.argsort(point_variances)[-target_size//2:]
+        low_var_indices = np.random.choice(
+            np.argsort(point_variances)[:-target_size//2],
+            size=target_size//2, replace=False
+        )
+        selected_indices = np.concatenate([high_var_indices, low_var_indices])
+        np.random.shuffle(selected_indices)
+        return X_scaled[selected_indices], selected_indices
+
+    def _build_penalty_context(self) -> str:
+        """Build context string about algorithm penalties for LLM guidance."""
+        if not self.algorithm_penalties and not self.banned_algorithms:
+            return "No algorithm performance history available."
+
+        context_lines = ["Algorithm Performance Memory:"]
+
+        # Show banned algorithms
+        if self.banned_algorithms:
+            banned_list = ", ".join(self.banned_algorithms)
+            context_lines.append(f"BANNED (consistently failed): {banned_list}")
+
+        # Show penalized algorithms
+        if self.algorithm_penalties:
+            for alg, penalty in sorted(self.algorithm_penalties.items(), key=lambda x: x[1], reverse=True):
+                if penalty > 0.3:  # Only mention significant penalties
+                    context_lines.append(f"{alg}: penalty {penalty:.2f} (poor past performance)")
+
+        # Show successful algorithms
+        successful_algs = [alg for alg in self.algorithm_history if
+                          self.algorithm_history[alg] and
+                          np.mean(self.algorithm_history[alg]) > 0.2]
+        if successful_algs:
+            success_list = ", ".join(successful_algs[:3])  # Top 3
+            context_lines.append(f"SUCCESSFUL in past: {success_list}")
+
+        return "\n".join(context_lines)
+
+    def _filter_algorithms_by_memory(self, algorithm_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter algorithm suggestions based on performance memory."""
+        filtered = []
+
+        for alg_config in algorithm_suggestions:
+            alg_name = alg_config['name']
+
+            # Skip banned algorithms
+            if alg_name in self.banned_algorithms:
+                print(f"[\033[96mMEMORY\033[0m] Skipping {alg_name} - banned due to consistent failures")
+                continue
+
+            # Apply penalty to reasoning
+            penalty = self.algorithm_penalties.get(alg_name, 0.0)
+            if penalty > 0.5:  # High penalty
+                print(f"[\033[96mMEMORY\033[0m] {alg_name} has high penalty ({penalty:.2f}) - considering carefully")
+                # Modify the reasoning to reflect poor past performance
+                alg_config['reasoning'] = f"[CAUTION: Poor past performance] {alg_config['reasoning']}"
+
+            filtered.append(alg_config)
+
+        # If all algorithms were filtered out, use fallback
+        if not filtered and algorithm_suggestions:
+            print(f"[\033[96mMEMORY\033[0m] All algorithms filtered - using best available")
+            # Return the algorithm with the lowest penalty
+            best_alg = min(algorithm_suggestions,
+                          key=lambda x: self.algorithm_penalties.get(x['name'], 0.0))
+            filtered = [best_alg]
+
+        return filtered
+
+    def _update_algorithm_memory(self, algorithm_results: Dict[str, Dict[str, Any]]):
+        """Update algorithm performance memory based on results."""
+        for alg_name, result in algorithm_results.items():
+            if result.get('success', False):
+                score = result.get('silhouette_score', 0.0)
+            else:
+                score = -1.0  # Failed execution
+
+            # Update history
+            if alg_name not in self.algorithm_history:
+                self.algorithm_history[alg_name] = []
+            self.algorithm_history[alg_name].append(score)
+
+            # Calculate penalty based on recent performance
+            recent_scores = self.algorithm_history[alg_name][-3:]  # Last 3 attempts
+            avg_score = np.mean(recent_scores)
+
+            # Penalty calculation
+            if avg_score < -0.5:  # Consistently very poor
+                self.algorithm_penalties[alg_name] = 1.0
+            elif avg_score < 0.0:  # Poor performance
+                self.algorithm_penalties[alg_name] = 0.7
+            elif avg_score < 0.1:  # Below average
+                self.algorithm_penalties[alg_name] = 0.4
+            elif avg_score < 0.2:  # Mediocre
+                self.algorithm_penalties[alg_name] = 0.2
+            else:  # Good performance
+                self.algorithm_penalties[alg_name] = max(0.0, self.algorithm_penalties.get(alg_name, 0.0) - 0.1)
+
+            # Ban algorithm if consistently terrible
+            if len(recent_scores) >= 3 and avg_score < -0.3:
+                self.banned_algorithms.add(alg_name)
+                print(f"[\033[96mMEMORY\033[0m] Banning {alg_name} - consistently poor performance")
+
+            print(f"[\033[96mMEMORY\033[0m] {alg_name}: score={score:.3f}, penalty={self.algorithm_penalties[alg_name]:.3f}")
 
     def _map_algorithm_name_to_config(self, name: str, reasoning: str, n_samples: int) -> Dict[str, Any]:
         """Map algorithm name from LLM to executable configuration."""
